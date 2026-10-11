@@ -106,7 +106,7 @@ export default async function SettingsPage() {
           <p className="text-sm text-muted-foreground">
             Chọn <strong>Vai trò</strong> rồi tick quyền cho vai trò đó; bấm <strong>Thêm vai trò</strong> để tạo vai trò mới dùng khi tạo
             tài khoản. Tick <strong>Xem</strong> để menu hiện trên thanh menu của vai trò đó; <strong>Thêm</strong>, <strong>Sửa</strong> mở các nút
-            tương ứng. Quản trị luôn có toàn quyền. Xóa dữ liệu và các menu Tài khoản, Nhật ký, Cấu hình luôn chỉ dành cho Quản trị. Mọi
+            tương ứng. Quản trị luôn có toàn quyền. Xóa dữ liệu chỉ dành cho Quản trị, trừ menu có cột Xóa (Syllabus); các menu Tài khoản, Nhật ký, Cấu hình luôn chỉ dành cho Quản trị. Mọi
             vai trò ngoài Quản trị luôn có khu vực giảng dạy (Tổng quan, thời khóa biểu, lớp) trong phạm vi lớp đã chọn.
           </p>
         </div>

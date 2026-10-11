@@ -85,13 +85,14 @@ export const timeSlotInput = z
   })
   .refine((v) => v.defaultStart < v.defaultEnd, { path: ["defaultEnd"], message: "Giờ kết thúc phải sau giờ bắt đầu" });
 
-/** Một bài trong Syllabus của lớp. */
-export const syllabusInput = z.object({
-  classId: id,
-  subjectCode: reqText(30).transform((v) => v.replace(/\s+/g, " ")),
+/** Sửa một bài trong Syllabus: buổi, tên bài/chủ đề, sản phẩm (lớp của bài không đổi). */
+export const syllabusEdit = z.object({
   period: intIn(1, 999),
   title: reqText(200),
+  product: optText(200),
 });
+/** Thêm một bài vào Syllabus của lớp. Khóa học chọn trên form chỉ để lọc lớp, máy chủ lấy khóa theo lớp. */
+export const syllabusInput = syllabusEdit.extend({ classId: id });
 
 export const TIMESHEET_ROLES = ["main", "substitute", "assistant"] as const;
 /** Công bổ sung: dòng công ghi tay của giáo viên ở bảng Chấm công. */
@@ -239,7 +240,7 @@ export const studentUpdate = withId(studentInput);
 export const courseUpdate = withId(courseInput);
 export const roomUpdate = withId(roomInput);
 export const timeSlotUpdate = withId(timeSlotInput);
-export const syllabusUpdate = withId(syllabusInput);
+export const syllabusUpdate = withId(syllabusEdit);
 export const classUpdate = withId(classInput);
 export const teacherRateUpdate = withId(teacherRateInput);
 export const purchaseUpdate = withId(purchaseInput);

@@ -80,14 +80,16 @@ test("GV: buộc đổi mật khẩu, chỉ thấy lớp mình và học viên l
   await page.goto("/admin/enrollments");
   await expect(page).toHaveURL(/\/teacher\/dashboard$/);
 
-  // Gọi thẳng API (kèm cookie phiên của GV) → 403.
+  // Gọi thẳng API ngoài quyền (kèm cookie phiên của GV) → 403.
+  expect((await page.request.get("/api/export/unpaid-tuition?format=xlsx")).status()).toBe(403);
+  // Syllabus thì giáo viên tự soạn cho lớp mình: tải được tệp mẫu; tệp không phải Excel bị từ chối vì nội dung, không phải vì quyền.
   const template = await page.request.get("/api/import/syllabus");
-  expect(template.status()).toBe(403);
+  expect(template.status()).toBe(200);
   const upload = await page.request.post("/api/import/syllabus?mode=commit", {
     headers: { origin: new URL(page.url()).origin },
     multipart: { file: { name: "a.xlsx", mimeType: "application/octet-stream", buffer: Buffer.from("PK\u0003\u0004") } },
   });
-  expect(upload.status()).toBe(403);
+  expect(upload.status()).toBe(400);
 });
 
 test("API ghi dữ liệu từ chối yêu cầu khác nguồn (CSRF) và yêu cầu chưa đăng nhập", async ({ request }) => {

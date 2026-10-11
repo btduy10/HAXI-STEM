@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 // Phân quyền theo vai trò, do Admin tick trong trang Cấu hình. Dùng chung cho máy chủ và giao diện.
-// Admin luôn có toàn quyền. Xóa dữ liệu, Tài khoản, Nhật ký, Cấu hình luôn chỉ dành cho Admin.
+// Admin luôn có toàn quyền. Tài khoản, Nhật ký, Cấu hình luôn chỉ dành cho Admin. Xóa dữ liệu cũng chỉ Admin,
+// trừ menu có thao tác "delete" (hiện chỉ Syllabus) thì theo ô tick Xóa của vai trò.
 
 // Vai trò: "admin" (Quản trị, cố định) và các vai trò được phân quyền. Hai vai trò có sẵn không xóa được;
 // Admin tạo thêm vai trò khác trong Cấu hình → Phân quyền. Khóa vai trò lưu ở tài khoản và hồ sơ giáo viên.
@@ -11,16 +12,16 @@ export const ADMIN_LABEL = "Quản trị";
 export const ROLE_KEY = /^[a-z][a-z0-9_]{1,39}$/;
 export const MAX_ROLES = 20;
 export const ROLE_LABEL_MAX = 40;
-export const PERMISSION_ACTIONS = ["view", "add", "edit"] as const;
+export const PERMISSION_ACTIONS = ["view", "add", "edit", "delete"] as const;
 export type PermissionAction = (typeof PERMISSION_ACTIONS)[number];
-export const ACTION_LABELS: Record<PermissionAction, string> = { view: "Xem", add: "Thêm", edit: "Sửa" };
+export const ACTION_LABELS: Record<PermissionAction, string> = { view: "Xem", add: "Thêm", edit: "Sửa", delete: "Xóa" };
 
 /** Các menu có thể mở cho Giáo viên / Giáo viên trực, theo đúng thứ tự trên thanh menu của Admin. */
 export const PERMISSION_MENUS = [
   { key: "courses", label: "Khóa học", href: "/admin/courses", actions: ["view", "add", "edit"], hint: "" },
   { key: "rooms", label: "Phòng & Ca học", href: "/admin/rooms-slots", actions: ["view", "add", "edit"], hint: "Gồm cả ngày nghỉ." },
   { key: "teachers", label: "Giáo viên", href: "/admin/teachers", actions: ["view", "add", "edit"], hint: "" },
-  { key: "syllabus", label: "Syllabus", href: "/admin/syllabus", actions: ["view", "add", "edit"], hint: "Danh sách bài học của từng lớp. Xóa và nhập Excel chỉ Admin." },
+  { key: "syllabus", label: "Syllabus", href: "/admin/syllabus", actions: ["view", "add", "edit", "delete"], hint: "Chương trình dạy của từng lớp theo buổi. Thêm gồm cả nhập từ Excel (bài đã có chỉ được cập nhật khi có Sửa)." },
   { key: "classes", label: "Lớp học", href: "/admin/classes", actions: ["view", "add", "edit"], hint: "Sửa gồm cả phân công giáo viên, lịch mẫu và sinh buổi học." },
   { key: "enrollments", label: "Ghi danh", href: "/admin/enrollments", actions: ["view", "add", "edit"], hint: "Thêm = nhập học viên mới, ghi danh, xếp lớp, xếp học bù; Sửa = cho rời lớp, hủy xếp bù." },
   { key: "students", label: "QL Học viên", href: "/admin/students", actions: ["view", "edit"], hint: "Xem danh sách, hồ sơ, lịch sử học; Sửa = sửa thông tin học viên. Học viên mới nhập ở Ghi danh. Ngày sinh, phụ huynh, điện thoại, ghi chú chỉ hiện khi tick “Thông tin cá nhân học viên”." },
@@ -35,7 +36,9 @@ export const PERMISSION_MENUS = [
 
 export type Menu = (typeof PERMISSION_MENUS)[number]["key"];
 export type ClassScope = "own" | "all";
-export type MenuPermission = Record<PermissionAction, boolean>;
+/** `delete` chỉ có ở menu hỗ trợ thao tác Xóa; thiếu = không được xóa. */
+export type MenuPermission = { view: boolean; add: boolean; edit: boolean; delete?: boolean };
+const supports = (menu: { actions: readonly PermissionAction[] }, action: PermissionAction) => menu.actions.includes(action);
 export type RolePermissions = {
   scope: ClassScope;
   menus: Record<Menu, MenuPermission>;
@@ -51,20 +54,27 @@ export const SCOPE_LABELS: Record<ClassScope, string> = { own: "Chỉ lớp củ
 const NONE: MenuPermission = { view: false, add: false, edit: false };
 const FULL: MenuPermission = { view: true, add: true, edit: true };
 const menusWith = (granted: Partial<Record<Menu, MenuPermission>>) =>
-  Object.fromEntries(PERMISSION_MENUS.map((m) => [m.key, { ...(granted[m.key] ?? NONE) }])) as Record<Menu, MenuPermission>;
+  Object.fromEntries(
+    PERMISSION_MENUS.map((m) => {
+      const { delete: remove, ...item } = granted[m.key] ?? NONE;
+      return [m.key, supports(m, "delete") ? { ...item, delete: remove === true } : item];
+    }),
+  ) as Record<Menu, MenuPermission>;
 
 /** Không có quyền gì: dùng cho vai trò lạ hoặc đã bị xóa, và làm điểm bắt đầu cho vai trò mới tạo. */
 export const NO_PERMISSIONS: RolePermissions = { scope: "own", menus: menusWith({}), studentPrivate: false };
 
 const VIEW: MenuPermission = { view: true, add: false, edit: false };
 const VIEW_EDIT: MenuPermission = { view: true, add: false, edit: true };
+const FULL_WITH_DELETE: MenuPermission = { ...FULL, delete: true };
 
 /**
- * Mặc định: Giáo viên điểm danh, chấm sao lớp mình và xem học viên lớp mình (không có thông tin cá nhân);
+ * Mặc định: Giáo viên điểm danh, chấm sao lớp mình, xem học viên lớp mình (không có thông tin cá nhân)
+ * và tự soạn Syllabus của lớp mình (xem, thêm, sửa, xóa);
  * Giáo viên trực thấy mọi lớp, hỗ trợ điểm danh, xem và sửa thông tin học viên kể cả thông tin cá nhân.
  */
 export const DEFAULT_PERMISSIONS: PermissionConfig = {
-  teacher: { label: "Giáo viên", scope: "own", menus: menusWith({ attendance: FULL, stars: FULL, students: VIEW }), studentPrivate: false },
+  teacher: { label: "Giáo viên", scope: "own", menus: menusWith({ attendance: FULL, stars: FULL, students: VIEW, syllabus: FULL_WITH_DELETE }), studentPrivate: false },
   duty_teacher: { label: "Giáo viên trực", scope: "all", menus: menusWith({ attendance: FULL, students: VIEW_EDIT }), studentPrivate: true },
 };
 
@@ -74,7 +84,7 @@ export const roleLabel = (config: PermissionConfig, role: string) =>
 /** Lựa chọn vai trò cho ô chọn (không gồm Quản trị). */
 export const roleOptions = (config: PermissionConfig) => Object.entries(config).map(([value, role]) => ({ value, label: role.label }));
 
-const menuPermission = z.object({ view: z.boolean(), add: z.boolean(), edit: z.boolean() });
+const menuPermission = z.object({ view: z.boolean(), add: z.boolean(), edit: z.boolean(), delete: z.boolean().optional() });
 const roleConfig = z.object({
   label: z.string().trim().min(1, "Bắt buộc nhập tên vai trò").max(ROLE_LABEL_MAX, `Tối đa ${ROLE_LABEL_MAX} ký tự`),
   scope: z.enum(["own", "all"]),
@@ -88,8 +98,8 @@ export const permissionConfigInput = z
 
 /**
  * Chuẩn hóa cấu hình đọc từ CSDL hoặc gửi từ form: hai vai trò có sẵn luôn tồn tại (thiếu/sai thì lấy mặc định,
- * tên cố định); vai trò tự tạo phải có khóa và tên hợp lệ; không có Xem thì không có Thêm/Sửa;
- * bỏ các thao tác menu không hỗ trợ.
+ * tên cố định); vai trò tự tạo phải có khóa và tên hợp lệ; không có Xem thì không có Thêm/Sửa/Xóa;
+ * bỏ các thao tác menu không hỗ trợ. Ô Xóa chỉ có ở menu hỗ trợ; cấu hình lưu trước khi có ô này coi như chưa tick.
  */
 export function normalizePermissions(value: unknown): PermissionConfig {
   const source = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
@@ -114,9 +124,13 @@ export function normalizePermissions(value: unknown): PermissionConfig {
     for (const menu of PERMISSION_MENUS) {
       const parsed = menuPermission.safeParse(rawMenus[menu.key]);
       const item = parsed.success ? parsed.data : fallback.menus[menu.key];
-      const supported = menu.actions as readonly PermissionAction[];
-      const view = item.view && supported.includes("view");
-      menus[menu.key] = { view, add: view && item.add && supported.includes("add"), edit: view && item.edit && supported.includes("edit") };
+      const view = item.view && supports(menu, "view");
+      menus[menu.key] = {
+        view,
+        add: view && item.add && supports(menu, "add"),
+        edit: view && item.edit && supports(menu, "edit"),
+        ...(supports(menu, "delete") ? { delete: view && item.delete === true } : {}),
+      };
     }
     out[role] = {
       label,

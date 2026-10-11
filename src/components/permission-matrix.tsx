@@ -27,7 +27,7 @@ const ROLE_HINTS: Record<string, string> = {
 };
 
 /**
- * Một bảng phân quyền duy nhất: chọn vai trò ở ô "Vai trò" rồi tick Xem / Thêm / Sửa theo menu.
+ * Một bảng phân quyền duy nhất: chọn vai trò ở ô "Vai trò" rồi tick Xem / Thêm / Sửa (và Xóa ở menu có hỗ trợ) theo menu.
  * Admin tạo thêm, đổi tên, xóa vai trò tại đây. Chỉ Admin dùng; máy chủ kiểm tra lại khi lưu.
  */
 export function PermissionMatrix({
@@ -54,13 +54,9 @@ export function PermissionMatrix({
 
   function toggle(menu: Menu, act: PermissionAction, checked: boolean) {
     const item = current.menus[menu];
-    // Bỏ Xem thì bỏ luôn Thêm/Sửa; tick Thêm/Sửa thì tự tick Xem.
-    const next =
-      act === "view"
-        ? checked
-          ? { ...item, view: true }
-          : { view: false, add: false, edit: false }
-        : { ...item, [act]: checked, view: item.view || checked };
+    // Bỏ Xem thì bỏ luôn Thêm/Sửa/Xóa; tick Thêm/Sửa/Xóa thì tự tick Xem.
+    const cleared = { view: false, add: false, edit: false, ...("delete" in item ? { delete: false } : {}) };
+    const next = act === "view" ? (checked ? { ...item, view: true } : cleared) : { ...item, [act]: checked, view: item.view || checked };
     patchRole({ menus: { ...current.menus, [menu]: next } });
   }
 
@@ -183,7 +179,7 @@ export function PermissionMatrix({
               <tr className="border-b text-left">
                 <th className="py-2 pr-2 font-medium">Menu</th>
                 {PERMISSION_ACTIONS.map((act) => (
-                  <th key={act} className="w-14 py-2 text-center font-medium">
+                  <th key={act} className="w-11 py-2 text-center font-medium">
                     {ACTION_LABELS[act]}
                   </th>
                 ))}
@@ -202,7 +198,7 @@ export function PermissionMatrix({
                         <input
                           type="checkbox"
                           className="size-5 align-middle accent-primary"
-                          checked={current.menus[menu.key][act]}
+                          checked={current.menus[menu.key][act] === true}
                           onChange={(event) => toggle(menu.key, act, event.target.checked)}
                           aria-label={`${current.label}: ${ACTION_LABELS[act]} ${menu.label}`}
                         />

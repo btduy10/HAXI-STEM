@@ -204,7 +204,7 @@ export const scheduleTemplates = pgTable(
   ],
 );
 
-// Syllabus: danh sách bài học của từng lớp (Mã môn + Tiết + Tên bài). Giáo viên chọn tên bài khi điểm danh.
+// Syllabus: chương trình dạy của từng lớp theo buổi (Buổi + Tên bài/Chủ đề + Sản phẩm). Giáo viên chọn tên bài khi điểm danh.
 export const syllabusLessons = pgTable(
   "syllabus_lessons",
   {
@@ -212,14 +212,16 @@ export const syllabusLessons = pgTable(
     classId: uuid("class_id")
       .notNull()
       .references(() => classes.id, { onDelete: "cascade" }),
-    subjectCode: text("subject_code").notNull(),
+    // Buổi thứ mấy của lớp (cột "period" giữ tên cũ từ thời còn gọi là Tiết).
     period: integer("period").notNull(),
     title: text("title").notNull(),
+    // Sản phẩm học viên làm ra trong buổi (không bắt buộc).
+    product: text("product"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
-    uniqueIndex("syllabus_lessons_class_subject_period_uq").on(t.classId, t.subjectCode, t.period),
+    uniqueIndex("syllabus_lessons_class_period_uq").on(t.classId, t.period),
     check("syllabus_lessons_period_chk", sql`${t.period} >= 1`),
   ],
 );

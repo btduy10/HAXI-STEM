@@ -169,6 +169,27 @@
       "when": 1791642190683,
       "tag": "0023_student_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791692349198,
+      "tag": "0024_syllabus_by_session",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791692359658,
+      "tag": "0025_syllabus_product",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791692361494,
+      "tag": "0026_syllabus_permissions",
+      "breakpoints": true
     }
   ]
 }

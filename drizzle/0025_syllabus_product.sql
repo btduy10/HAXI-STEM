@@ -1,0 +1,1 @@
+ALTER TABLE "syllabus_lessons" ADD COLUMN "product" text;

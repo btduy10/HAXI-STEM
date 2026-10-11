@@ -10,7 +10,8 @@ import { PasswordInput } from "@/components/password-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-export type FieldOption = { value: string; label: string };
+/** `group`: giá trị của ô cha mà lựa chọn này thuộc về (dùng với `Field.filterBy`). */
+export type FieldOption = { value: string; label: string; group?: string };
 export type Field = {
   name: string;
   label: string;
@@ -23,6 +24,8 @@ export type Field = {
   defaultValue?: string;
   /** Gợi ý cho ô gõ tự do (vd. các loại đã nhập trước đó); người dùng vẫn gõ được giá trị khác. */
   suggestions?: string[];
+  /** Ô chọn phụ thuộc: chỉ hiện các lựa chọn có `group` bằng giá trị đang chọn của ô tên này (vd. Lớp theo Khóa học). */
+  filterBy?: string;
 };
 
 export type ActionFn = (input: unknown) => Promise<{ ok: true; data: unknown } | { ok: false; error: string; fieldErrors?: Record<string, string> }>;
@@ -84,6 +87,11 @@ export function FormDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // Giá trị đang chọn của các ô mà ô khác phụ thuộc vào (`filterBy`).
+  const parents = new Set(fields.flatMap((f) => (f.filterBy ? [f.filterBy] : [])));
+  const [parentValues, setParentValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.filter((f) => parents.has(f.name)).map((f) => [f.name, initial?.[f.name] ?? f.defaultValue ?? ""])),
+  );
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -154,14 +162,22 @@ export function FormDialog({
                   {field.required && <span className="text-destructive"> *</span>}
                 </Label>
                 {field.type === "select" ? (
-                  <select {...common} className={selectClass}>
+                  <select
+                    {...common}
+                    // Ô phụ thuộc dựng lại khi ô cha đổi để không giữ lựa chọn của nhóm cũ.
+                    key={field.filterBy ? `${field.name}:${parentValues[field.filterBy] ?? ""}` : field.name}
+                    className={selectClass}
+                    onChange={parents.has(field.name) ? (event) => setParentValues((prev) => ({ ...prev, [field.name]: event.target.value })) : undefined}
+                  >
                     {!field.required && <option value="">— Không chọn —</option>}
                     {field.required && !initial?.[field.name] && !field.defaultValue && <option value="">— Chọn —</option>}
-                    {field.options?.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
+                    {field.options
+                      ?.filter((o) => !field.filterBy || o.group === parentValues[field.filterBy])
+                      .map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
                   </select>
                 ) : field.type === "textarea" ? (
                   <Textarea {...common} rows={3} />

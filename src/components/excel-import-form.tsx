@@ -20,7 +20,7 @@ const KINDS = {
     endpoint: "/api/import/syllabus",
     backHref: "/admin/syllabus",
     describe: (row: Row) =>
-      `${row.classCode || "(thiếu lớp)"} · ${row.subjectCode || "(thiếu mã môn)"} · Tiết ${row.period || "?"} – ${row.title || "(thiếu tên bài)"}`,
+      `${row.courseName || "(thiếu khóa học)"} · ${row.classCode || "(thiếu lớp)"} · Buổi ${row.period || "?"} – ${row.title || "(thiếu tên bài)"}${row.product ? ` · Sản phẩm: ${row.product}` : ""}`,
     done: (data: Preview) => `Đã thêm ${data.inserted ?? 0} bài, cập nhật ${data.updated ?? 0} bài.`,
   },
 } as const;

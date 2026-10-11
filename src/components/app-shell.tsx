@@ -56,7 +56,6 @@ const NAV: { admin: NavEntry[]; teacher: NavItem[] } = {
         { href: "/admin/courses", label: "Khóa học", icon: BookOpenIcon },
         { href: "/admin/rooms-slots", label: "Phòng & Ca học", icon: Building2Icon },
         { href: "/admin/teachers", label: "Giáo viên", icon: UsersIcon },
-        { href: "/admin/syllabus", label: "Syllabus", icon: ListOrderedIcon },
       ],
     },
     {
@@ -68,6 +67,7 @@ const NAV: { admin: NavEntry[]; teacher: NavItem[] } = {
         { href: "/admin/audit", label: "Nhật ký", icon: ScrollTextIcon },
       ],
     },
+    { href: "/admin/syllabus", label: "Syllabus", icon: ListOrderedIcon },
     { href: "/admin/classes", label: "Lớp học", icon: SchoolIcon },
     { href: "/admin/enrollments", label: "Ghi danh", icon: ClipboardListIcon },
     { href: "/admin/students", label: "QL Học viên", icon: GraduationCapIcon },
