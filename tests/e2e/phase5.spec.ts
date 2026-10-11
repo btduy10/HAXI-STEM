@@ -488,6 +488,11 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
     // Em vắng buổi hôm qua → nằm trong "Cần học bù"; xếp học ghép vào buổi hôm nay của lớp khác.
     const [student] = await db`select id from students where full_name = ${WAITING}`;
     await db`insert into attendances (session_id, student_id, status) values (${absent!.id}, ${student!.id}, 'absent')`;
+    // Một buổi em có mặt, giáo viên chọn bài từ Syllabus: hiện ở Chương trình học và tính vào số buổi đã học.
+    const [learned] = await db`
+      insert into sessions (class_id, date, start_time, end_time, status, content)
+      values (${classId("HB-E2E")}, ${shift(day, -2)}, '18:00', '19:30', 'done', 'Tiết 2 – Lắp ráp thử') returning id`;
+    await db`insert into attendances (session_id, student_id, status) values (${learned!.id}, ${student!.id}, 'present')`;
     await page.reload();
     const need = page.locator(`[data-makeup="${firstCode}"]`);
     await expect(need).toContainText("Chưa xếp bù");
@@ -509,22 +514,34 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
     await expect(page.getByText(WAITING)).toBeVisible();
     await expect(page.getByText("Học bù", { exact: true })).toBeVisible();
 
-    // QL Học viên: hồ sơ có chương trình đã học và lịch sử buổi học kèm tên bài; danh sách có cột Sao.
+    // QL Học viên: hồ sơ có lịch học, chương trình học (bài đã học), số buổi đã học và lịch sử buổi học; danh sách có cột Sao.
     await page.goto(`/admin/students/${student!.id}`);
     // Lịch học: buổi học bù đã xếp ở Ghi danh (hôm nay, lớp HC-E2E) có nhãn Học bù kèm buổi vắng được bù.
     await expect(page.getByRole("heading", { name: /^Lịch học/ })).toBeVisible();
     const makeupRow = page.locator('[data-schedule="HC-E2E"]');
     await expect(makeupRow).toHaveCount(1);
-    await expect(makeupRow).toContainText("18h00 – 19h30");
-    await expect(makeupRow).toContainText("Lớp HC-E2E – Lớp nhận học bù");
-    await expect(makeupRow).toContainText("Bù buổi vắng");
+    // Hàng 1: Thứ - Ngày - Giờ; hàng 2: Tên lớp - Giáo viên - Phòng; hàng 3: Bù buổi vắng ngày - lớp đã vắng.
+    await expect(makeupRow).toContainText(/(Thứ \d|Chủ nhật) - \d{2}\/\d{2}\/\d{4} - 18h00 - 19h30/);
+    await expect(makeupRow).toContainText("Lớp nhận học bù");
+    await expect(makeupRow).toContainText(/Bù buổi vắng \d{2}\/\d{2}\/\d{4} - Lớp thử học bù/);
     await expect(makeupRow.getByText("Học bù", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Lịch sử ghi sao/ })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Chương trình đã học" })).toBeVisible();
-    await expect(page.getByText(/Lớp HB-E2E – Lớp thử học bù/)).toBeVisible();
+    // Chương trình học: mỗi hàng một bài em đã học xong, số bài theo Tiết của Syllabus; bài của buổi vắng không có.
+    await expect(page.getByRole("heading", { name: "Chương trình đã học" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: /^Chương trình học/ })).toContainText("1 bài đã học");
+    const lessonRow = page.locator('[data-lesson="HB-E2E"]');
+    await expect(lessonRow).toHaveCount(1);
+    await expect(lessonRow).toContainText("Bài 2: Lắp ráp thử");
+    await expect(lessonRow).toContainText("Lớp thử học bù - ");
+    await expect(page.getByText("Bài thử học bù")).toHaveCount(0);
+    // Lịch sử buổi học: số buổi đã học trên tổng số buổi của khóa; mỗi hàng Ngày - Tên lớp (- Giáo viên), không còn tên bài.
     await expect(page.getByRole("heading", { name: /Lịch sử buổi học/ })).toBeVisible();
-    await expect(page.getByText("Bài thử học bù")).toBeVisible();
-    await expect(page.getByText("Đã xếp bù")).toBeVisible();
+    await expect(page.locator('[data-progress="HB-E2E"]')).toHaveText(/^Lớp thử học bù - Đã học: 1\/\d+ buổi$/);
+    const sessionRows = page.locator('[data-session="HB-E2E"]');
+    await expect(sessionRows).toHaveCount(2);
+    await expect(sessionRows.first()).toContainText(/\d{2}\/\d{2}\/\d{4} - Lớp thử học bù/);
+    await expect(sessionRows.filter({ hasText: "Đã xếp bù" })).toHaveCount(1);
+    await expect(sessionRows.filter({ hasText: "Lắp ráp thử" })).toHaveCount(0);
     await expectNoHorizontalScroll(page);
     await page.goto(`/admin/students?q=${firstCode}`);
     await expect(page.getByText(WAITING).first()).toBeVisible();

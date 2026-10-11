@@ -5,7 +5,8 @@ import { SLOT_NAMES, SLOT_NAME_LABELS } from "@/lib/validation/entities";
 /** Số hàng tối thiểu của mỗi lớp trên bảng tổng quan; lớp đông hơn thì hiện đủ học viên. */
 export const ROSTER_ROWS = 8;
 
-const DAY_LABELS: Record<number, string> = { 1: "Thứ 2", 2: "Thứ 3", 3: "Thứ 4", 4: "Thứ 5", 5: "Thứ 6", 6: "Thứ 7", 7: "Chủ nhật" };
+/** Tên thứ dạng "Thứ 2" … "Chủ nhật" theo thứ ISO (1 = Thứ 2). */
+export const DAY_LABELS: Record<number, string> = { 1: "Thứ 2", 2: "Thứ 3", 3: "Thứ 4", 4: "Thứ 5", 5: "Thứ 6", 6: "Thứ 7", 7: "Chủ nhật" };
 
 /** Tên buổi: "Ca tối" + thứ 1 → "Tối Thứ 2"; thứ 7 của tuần là Chủ nhật. */
 export function rosterSessionLabel(slotName: string, weekday: number): string {

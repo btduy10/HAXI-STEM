@@ -2,8 +2,9 @@ import { BackLink } from "@/components/back-link";
 import { ConfirmButton, FormDialogButton } from "@/components/action-buttons";
 import { Badge } from "@/components/ui/badge";
 import { MAKEUP_STATE_LABELS } from "@/domain/makeup";
-import { rosterTime } from "@/domain/roster";
-import { WEEKDAY_SHORT, isoWeekday } from "@/lib/dates";
+import { DAY_LABELS, rosterTime } from "@/domain/roster";
+import { lessonTitle } from "@/domain/syllabus";
+import { isoWeekday } from "@/lib/dates";
 import { LABELS, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { cancelRedemptionAction, redeemGiftAction } from "@/server/actions/rewards";
@@ -13,7 +14,9 @@ import { getRedemptionInfo } from "@/server/services/redemptions";
 import { getStudentStarProfile } from "@/server/services/stars";
 import { STUDENT_SCHEDULE_DAYS, getStudentLearningHistory, getStudentSchedule } from "@/server/services/student-history";
 
-/** Hồ sơ học viên: sao, lịch học sắp tới, quà, chương trình đã học và lịch sử buổi học; dùng chung cho Admin và GV (service kiểm tra quyền). */
+/** Hồ sơ học viên: sao, lịch học sắp tới, quà, chương trình học (các bài đã học) và lịch sử buổi học; dùng chung cho Admin và GV (service kiểm tra quyền). */
+// Các phần của một hàng nối bằng " - "; phần trống (chưa có giáo viên, chưa có phòng) được bỏ qua.
+const joined = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" - ");
 export async function StudentStarProfile({ actor, studentId, backHref }: { actor: Actor; studentId: string; backHref: string }) {
   const profile = await orNotFound(getStudentStarProfile(actor, studentId));
   const { student } = profile;
@@ -24,7 +27,6 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
     getStudentSchedule(actor, studentId),
   ]);
   const admin = actor.role === "admin";
-  const attended = history.sessions.filter((a) => a.attended).length;
 
   return (
     <div className="mx-auto grid max-w-3xl gap-6">
@@ -64,17 +66,13 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
                 className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm"
               >
                 <span className="min-w-0">
-                  <span className="font-medium">
-                    {WEEKDAY_SHORT[isoWeekday(s.date)]} {formatDate(s.date)} · {rosterTime(s.startTime)} – {rosterTime(s.endTime)}
+                  <span className="block font-semibold">
+                    {joined(DAY_LABELS[isoWeekday(s.date)], formatDate(s.date), rosterTime(s.startTime), rosterTime(s.endTime))}
                   </span>
-                  <span className="block text-xs break-words text-muted-foreground">
-                    Lớp {s.classCode} – {s.className}
-                    {s.teacherName && ` · ${s.teacherName}`}
-                    {s.roomName && ` · ${s.roomName}`}
-                  </span>
+                  <span className="block break-words text-muted-foreground">{joined(s.className, s.teacherName, s.roomName)}</span>
                   {s.makeup && (
-                    <span className="block text-xs text-muted-foreground">
-                      Bù buổi vắng {formatDate(s.absentDate)} · {s.absentClassCode}
+                    <span className="block break-words text-muted-foreground">
+                      Bù buổi vắng {joined(formatDate(s.absentDate), s.absentClassName)}
                     </span>
                   )}
                 </span>
@@ -164,30 +162,24 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
         )}
       </section>
 
-      <section className="grid gap-2" aria-labelledby="programs-title">
-        <h2 id="programs-title" className="font-medium">
-          Chương trình đã học
+      <section className="grid gap-2" aria-labelledby="lessons-title">
+        <h2 id="lessons-title" className="font-medium">
+          Chương trình học <span className="text-sm font-normal text-muted-foreground">({history.lessons.length} bài đã học)</span>
         </h2>
-        {history.programs.length === 0 ? (
-          <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">Chưa ghi danh lớp nào.</p>
+        {history.lessons.length === 0 ? (
+          <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">Chưa có bài nào đã học.</p>
         ) : (
           <ul className="grid gap-1.5">
-            {history.programs.map((p) => (
-              <li key={p.enrollmentId} className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm">
-                <span className="min-w-0">
-                  <span className="font-medium break-words">{p.courseName}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    Lớp {p.classCode} – {p.className} · vào lớp {formatDate(p.joinedAt)}
-                    {p.leftAt && ` · rời lớp ${formatDate(p.leftAt)}`}
-                  </span>
-                </span>
-                <span className="flex items-center gap-2">
-                  <span className="tabular-nums text-muted-foreground" aria-label={`Có mặt ${p.attended} trên ${p.taught} buổi đã dạy`}>
-                    {p.attended}/{p.taught} buổi
-                  </span>
-                  <Badge variant={p.status === "active" && p.classStatus === "open" ? "secondary" : "outline"}>
-                    {p.status === "left" ? LABELS.enrollmentStatus.left : p.classStatus === "closed" ? "Đã học xong" : LABELS.enrollmentStatus.active}
-                  </Badge>
+            {history.lessons.map((l) => (
+              <li
+                key={l.sessionId}
+                data-lesson={l.classCode}
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 glass-solid rounded-xl border px-3 py-2 text-sm"
+              >
+                <span className="min-w-0 font-medium break-words">{lessonTitle(l.content)}</span>
+                <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {joined(l.className, formatDate(l.date))}
+                  {l.isMakeup && <Badge variant="secondary">Học bù</Badge>}
                 </span>
               </li>
             ))}
@@ -197,21 +189,33 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
 
       <section className="grid gap-2" aria-labelledby="sessions-title">
         <h2 id="sessions-title" className="font-medium">
-          Lịch sử buổi học{" "}
-          <span className="text-sm font-normal text-muted-foreground">
-            (có mặt {attended}/{history.sessions.length} buổi đã điểm danh)
-          </span>
+          Lịch sử buổi học
         </h2>
+        {/* Mỗi lớp em đã ghi danh: số buổi đã học (có mặt, kể cả học bù xong) trên tổng số buổi của khóa. */}
+        {history.programs.length > 0 && (
+          <ul className="grid gap-0.5 text-sm">
+            {history.programs.map((p) => (
+              <li key={p.classId} data-progress={p.classCode} className="break-words">
+                {p.className} -{" "}
+                <span className="font-semibold">
+                  Đã học: {p.learned}/{p.totalSessions} buổi
+                </span>
+                {p.status === "left" && p.leftAt && <span className="text-muted-foreground"> (rời lớp {formatDate(p.leftAt)})</span>}
+              </li>
+            ))}
+          </ul>
+        )}
         {history.sessions.length === 0 ? (
           <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">Chưa có buổi nào được điểm danh.</p>
         ) : (
           <ul className="grid gap-1.5">
             {history.sessions.map((a) => (
-              <li key={a.sessionId} className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm">
-                <span className="min-w-0">
-                  {formatDate(a.date)} <span className="text-muted-foreground">· {a.classCode} · {a.courseName}</span>
-                  <span className={cn("block break-words", a.lesson ? "font-medium" : "text-xs text-muted-foreground")}>{a.lesson || "Chưa ghi tên bài"}</span>
-                </span>
+              <li
+                key={a.sessionId}
+                data-session={a.classCode}
+                className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm"
+              >
+                <span className="min-w-0 break-words">{joined(formatDate(a.date), a.className, a.teacherName)}</span>
                 <span className="flex flex-wrap items-center justify-end gap-2">
                   {a.stars !== null && a.stars !== 0 && (
                     <span className={cn("font-semibold tabular-nums", a.stars > 0 ? "text-emerald-600" : "text-red-600")}>
@@ -227,7 +231,6 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
           </ul>
         )}
       </section>
-
     </div>
   );
 }

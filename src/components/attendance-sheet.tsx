@@ -9,11 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { type SyllabusLesson, lessonLabels as toLessonLabels } from "@/domain/syllabus";
 import { cn } from "@/lib/utils";
 
 type Status = "present" | "late" | "left_early" | "excused" | "absent";
 type Row = { studentId: string; code: string; fullName: string; status: Status; note: string; /** Học viên lớp khác học bù ở buổi này. */ makeup?: boolean };
-type Lesson = { subjectCode: string; period: number; title: string };
 
 /** Giá trị của lựa chọn "Khác (tự nhập)" trong ô chọn nội dung buổi học. */
 const OTHER = "__other__";
@@ -42,7 +42,7 @@ export function AttendanceSheet({
   initialContent: string;
   initialRemark: string;
   /** Bài học trong Syllabus của lớp; rỗng thì ô nội dung là ô gõ tự do. */
-  lessons: Lesson[];
+  lessons: SyllabusLesson[];
   recorded: boolean;
   blockedReason: string | null;
   saveAction: ActionFn;
@@ -51,8 +51,7 @@ export function AttendanceSheet({
   const [content, setContent] = useState(initialContent);
   const [remark, setRemark] = useState(initialRemark);
   // Tên bài lưu vào nội dung buổi học: "Tiết 3 – Tên bài", kèm mã môn khi lớp có nhiều môn.
-  const manySubjects = new Set(lessons.map((l) => l.subjectCode)).size > 1;
-  const lessonLabels = lessons.map((l) => `${manySubjects ? `${l.subjectCode} · ` : ""}Tiết ${l.period} – ${l.title}`);
+  const lessonLabels = toLessonLabels(lessons);
   // Nội dung cũ không khớp bài nào thì mở sẵn ở "Khác" để không mất chữ đã nhập.
   const [choice, setChoice] = useState(initialContent === "" ? "" : lessonLabels.includes(initialContent) ? initialContent : OTHER);
   const [noteOpen, setNoteOpen] = useState<Set<string>>(() => new Set(initialRows.filter((r) => r.note).map((r) => r.studentId)));

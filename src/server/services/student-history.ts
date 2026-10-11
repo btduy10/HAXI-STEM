@@ -1,8 +1,9 @@
-import { and, between, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, asc, between, desc, eq, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import { attendances, classes, courses, enrollments, makeupAssignments, rooms, sessionStudents, sessions, teachers } from "@/db/schema";
 import { isAbsence, makeupState } from "@/domain/makeup";
+import { parseLessonLabel } from "@/domain/syllabus";
 import { addDays } from "@/lib/dates";
 import { todayIso } from "@/lib/format";
 import { type Actor, allowedClassIds } from "../guard";
@@ -59,7 +60,7 @@ export async function getStudentSchedule(actor: Actor, studentId: string, today:
       .leftJoin(rooms, eq(rooms.id, sessions.roomId))
       .where(and(upcoming, or(and(eq(sessions.kind, "regular"), enrolledOnDate), and(eq(sessions.kind, "makeup"), pickedForMakeup)))),
     db
-      .select({ ...columns, absentDate: absentSession.date, absentClassCode: absentClass.code })
+      .select({ ...columns, absentDate: absentSession.date, absentClassCode: absentClass.code, absentClassName: absentClass.name })
       .from(makeupAssignments)
       .innerJoin(sessions, eq(sessions.id, makeupAssignments.makeupSessionId))
       .innerJoin(classes, eq(classes.id, sessions.classId))
@@ -74,15 +75,18 @@ export async function getStudentSchedule(actor: Actor, studentId: string, today:
   return [
     // `makeup`: em học buổi này để bù một buổi vắng (học ghép); khi đó có ngày và lớp của buổi vắng.
     ...guest.map((g) => ({ ...g, makeup: true as const })),
-    ...own.filter((o) => !guestIds.has(o.sessionId)).map((o) => ({ ...o, makeup: false as const, absentDate: null, absentClassCode: null })),
+    ...own.filter((o) => !guestIds.has(o.sessionId)).map((o) => ({ ...o, makeup: false as const, absentDate: null, absentClassCode: null, absentClassName: null })),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.classCode.localeCompare(b.classCode, "vi"));
 }
 
 /**
  * Lịch sử học của một học viên, để giáo viên biết em đã học gì và không dạy trùng chương trình:
- * - `programs`: từng lớp/khóa em đã và đang học, kèm số buổi có mặt trên số buổi lớp đã dạy trong thời gian em học.
- * - `sessions`: từng buổi đã điểm danh, kèm tên bài đã dạy.
- * Người xem được học viên thì xem được lịch sử ở MỌI lớp của em (chỉ ngày, lớp, tên bài, có mặt/vắng);
+ * - `programs`: từng lớp em đã và đang ghi danh, kèm số buổi đã học trên tổng số buổi của khóa.
+ *   Đã học = buổi của lớp mà em có mặt (kể cả đi trễ, về sớm) + buổi vắng của lớp đó đã học bù xong;
+ *   buổi em học ghép ở lớp khác tính cho lớp em bị vắng, không tính cho lớp nhận.
+ * - `lessons`: các bài em đã học xong (buổi em có mặt và giáo viên đã ghi nội dung), mỗi bài của mỗi lớp một dòng.
+ * - `sessions`: từng buổi đã điểm danh.
+ * Người xem được học viên thì xem được lịch sử ở MỌI lớp của em (chỉ ngày, lớp, giáo viên, tên bài, có mặt/vắng);
  * số sao của buổi chỉ có với lớp trong phạm vi của người xem.
  */
 export async function getStudentLearningHistory(actor: Actor, studentId: string) {
@@ -90,37 +94,41 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
   const allowed = await allowedClassIds(actor);
   const inScope = (classId: string) => allowed === null || allowed.includes(classId);
   const attendedIn = sql`${attendances.status} in ('present', 'late', 'left_early')`;
-  const [programs, history] = await Promise.all([
+  const [enrolled, history] = await Promise.all([
     db
       .select({
-        enrollmentId: enrollments.id,
         classId: classes.id,
         classCode: classes.code,
         className: classes.name,
         courseName: courses.name,
-        joinedAt: enrollments.joinedAt,
+        totalSessions: courses.totalSessions,
         leftAt: enrollments.leftAt,
         status: enrollments.status,
         classStatus: classes.status,
-        // Buổi lớp đã dạy trong thời gian em học, và số buổi em có mặt trong các buổi đó.
-        taught: sql<number>`(
-          select count(*)::int from sessions s
-          where s.class_id = ${classes.id} and s.status = 'done' and s.kind = 'regular'
-            and s.date >= ${enrollments.joinedAt} and (${enrollments.leftAt} is null or s.date < ${enrollments.leftAt})
-        )`,
+        // Buổi của lớp mà em có mặt, không tính buổi em là học viên học bù (buổi đó tính cho lớp bị vắng).
         attended: sql<number>`(
           select count(*)::int from attendances a
           inner join sessions s on s.id = a.session_id
-          where a.student_id = ${enrollments.studentId} and s.class_id = ${classes.id} and s.status = 'done' and s.kind = 'regular'
+          where a.student_id = ${enrollments.studentId} and s.class_id = ${classes.id} and s.status <> 'cancelled'
             and a.status in ('present', 'late', 'left_early')
-            and s.date >= ${enrollments.joinedAt} and (${enrollments.leftAt} is null or s.date < ${enrollments.leftAt})
+            and not exists (select 1 from makeup_assignments m where m.makeup_session_id = s.id and m.student_id = a.student_id)
+        )`,
+        // Buổi vắng của lớp đã học bù xong (có mặt ở buổi học bù).
+        madeUp: sql<number>`(
+          select count(*)::int from makeup_assignments m
+          inner join sessions missed on missed.id = m.absent_session_id
+          inner join sessions held on held.id = m.makeup_session_id
+          inner join attendances a on a.session_id = held.id and a.student_id = m.student_id
+          where m.student_id = ${enrollments.studentId} and missed.class_id = ${classes.id} and held.status <> 'cancelled'
+            and a.status in ('present', 'late', 'left_early')
         )`,
       })
       .from(enrollments)
       .innerJoin(classes, eq(classes.id, enrollments.classId))
       .innerJoin(courses, eq(courses.id, classes.courseId))
       .where(eq(enrollments.studentId, studentId))
-      .orderBy(desc(enrollments.joinedAt), desc(enrollments.createdAt)),
+      // Lượt đang hiệu lực trước, rồi lượt mới nhất: em ghi danh lại cùng lớp thì lấy lượt đó.
+      .orderBy(asc(enrollments.status), desc(enrollments.joinedAt), desc(enrollments.createdAt)),
     db
       .select({
         sessionId: sessions.id,
@@ -128,8 +136,10 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
         date: sessions.date,
         startTime: sessions.startTime,
         classCode: classes.code,
-        courseName: courses.name,
-        lesson: sessions.content,
+        className: classes.name,
+        // Người thực dạy: giáo viên dạy thay nếu có; tên viết tắt nếu có.
+        teacherName: sql<string | null>`coalesce(nullif(${substituteTeacher.shortName}, ''), ${substituteTeacher.fullName}, nullif(${teachers.shortName}, ''), ${teachers.fullName})`,
+        content: sessions.content,
         status: attendances.status,
         // Em học buổi này với tư cách học bù (học ghép từ lớp khác).
         isMakeup: sql<boolean>`${guestOf.id} is not null`,
@@ -143,7 +153,8 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
       .from(attendances)
       .innerJoin(sessions, eq(sessions.id, attendances.sessionId))
       .innerJoin(classes, eq(classes.id, sessions.classId))
-      .innerJoin(courses, eq(courses.id, classes.courseId))
+      .leftJoin(teachers, eq(teachers.id, sessions.teacherId))
+      .leftJoin(substituteTeacher, eq(substituteTeacher.id, sessions.substituteTeacherId))
       .leftJoin(guestOf, and(eq(guestOf.makeupSessionId, sessions.id), eq(guestOf.studentId, attendances.studentId)))
       .leftJoin(madeUpIn, and(eq(madeUpIn.absentSessionId, sessions.id), eq(madeUpIn.studentId, attendances.studentId)))
       .leftJoin(makeupSession, eq(makeupSession.id, madeUpIn.makeupSessionId))
@@ -152,8 +163,39 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
       .orderBy(desc(sessions.date), desc(sessions.startTime))
       .limit(300),
   ]);
+
+  // Mỗi lớp một dòng (em ghi danh lại cùng lớp không sinh thêm dòng).
+  const seenClasses = new Set<string>();
+  const programs = enrolled
+    .filter((e) => !seenClasses.has(e.classId) && seenClasses.add(e.classId))
+    .map(({ attended, madeUp, ...e }) => ({ ...e, learned: attended + madeUp }))
+    .sort((a, b) => a.className.localeCompare(b.className, "vi"));
+
+  // Bài đã học: buổi em có mặt và đã ghi nội dung; cùng một bài ở cùng lớp chỉ lấy lần học đầu tiên.
+  const firstLearned = new Map<string, (typeof history)[number]>();
+  for (const row of [...history].reverse()) {
+    const content = row.content?.trim();
+    if (!row.attended || !content) continue;
+    const key = `${row.classId}|${content}`;
+    if (!firstLearned.has(key)) firstLearned.set(key, row);
+  }
+  const lessons = [...firstLearned.values()]
+    .map((row) => {
+      const content = row.content!.trim();
+      // `lesson`: bài chọn từ Syllabus (có số tiết); null khi giáo viên tự gõ nội dung.
+      return { sessionId: row.sessionId, classCode: row.classCode, className: row.className, date: row.date, isMakeup: row.isMakeup, content, lesson: parseLessonLabel(content) };
+    })
+    .sort(
+      (a, b) =>
+        a.className.localeCompare(b.className, "vi") ||
+        (a.lesson?.subjectCode ?? "").localeCompare(b.lesson?.subjectCode ?? "", "vi") ||
+        (a.lesson?.period ?? Number.MAX_SAFE_INTEGER) - (b.lesson?.period ?? Number.MAX_SAFE_INTEGER) ||
+        a.date.localeCompare(b.date),
+    );
+
   return {
     programs,
+    lessons,
     sessions: history.map(({ classId, makeupAssigned, makeupSessionStatus, makeupAttendance: madeUp, stars, ...row }) => ({
       ...row,
       // Sao của buổi chỉ hiện với lớp trong phạm vi của người xem.

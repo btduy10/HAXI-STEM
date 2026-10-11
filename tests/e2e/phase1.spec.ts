@@ -66,7 +66,7 @@ test("GV: buộc đổi mật khẩu, chỉ thấy lớp mình và học viên l
   await page.screenshot({ path: "test-results/shots/teacher-students-360.png" });
   // Hồ sơ của học viên lớp mình mở được; học viên lớp khác coi như không tồn tại.
   await page.getByRole("link", { name: "Hồ sơ" }).first().click();
-  await expect(page.getByRole("heading", { name: "Chương trình đã học" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Chương trình học/ })).toBeVisible();
   const outsider = sql();
   const [foreign] = await outsider`
     select s.id from students s join enrollments e on e.student_id = s.id join classes c on c.id = e.class_id
