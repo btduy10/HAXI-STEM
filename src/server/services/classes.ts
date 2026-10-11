@@ -23,11 +23,11 @@ import {
 import { classCodeYearPrefix, nextClassCode } from "@/domain/student-code";
 import { ROSTER_NO_TEACHER_SHADE, rosterSessionLabel, rosterSessionOrder, rosterTeacherShade } from "@/domain/roster";
 import { todayIso } from "@/lib/format";
-import type { classInput, classTeacherInput, classTeacherUpdate, enrollInput, leaveInput, newEnrollmentInput } from "@/lib/validation/entities";
+import type { classInput, enrollInput, leaveInput, newEnrollmentInput } from "@/lib/validation/entities";
 import { audit } from "../audit";
 import { AppError, notFound, translateDbError } from "../errors";
 import { type Actor, allowedClassIds, assertAdmin, assertCan, assertCanAny, assertClassAccess, assertNotTimetableOnly } from "../guard";
-import { createRow, deleteRow, updateRow } from "./crud";
+import { deleteRow, updateRow } from "./crud";
 import { purgeAllStudentStarLogs, purgeStudentStarLogs } from "./stars";
 import { insertStudent } from "./students";
 
@@ -154,6 +154,7 @@ export async function deleteClass(actor: Actor, id: string) {
   return deleteRow(actor, classes, "classes", id);
 }
 
+/** Giáo viên của lớp. Danh sách này được ghi tự động theo lịch mẫu của lớp (GV chính, trợ giảng của từng dòng). */
 export async function listClassTeachers(actor: Actor, classId: string) {
   await assertClassAccess(actor, classId);
   return db
@@ -168,38 +169,6 @@ export async function listClassTeachers(actor: Actor, classId: string) {
     .innerJoin(teachers, eq(teachers.id, classTeachers.teacherId))
     .where(eq(classTeachers.classId, classId))
     .orderBy(asc(classTeachers.role), asc(teachers.fullName));
-}
-
-// Phân công/bỏ phân công giáo viên là một phần của "Sửa lớp".
-export async function assignTeacher(actor: Actor, data: z.output<typeof classTeacherInput>) {
-  assertCan(actor, "classes", "edit");
-  await assertClassAccess(actor, data.classId);
-  return createRow(actor, classTeachers, "class_teachers", data, "classes", "edit");
-}
-export async function updateClassTeacher(actor: Actor, data: z.output<typeof classTeacherUpdate>) {
-  assertCan(actor, "classes", "edit");
-  return db.transaction(async (tx) => {
-    const [before] = await tx.select().from(classTeachers).where(eq(classTeachers.id, data.id)).limit(1);
-    if (!before) throw notFound("phân công");
-    await assertClassAccess(actor, before.classId, tx);
-    const [row] = await tx
-      .update(classTeachers)
-      .set({ role: data.role })
-      .where(eq(classTeachers.id, data.id))
-      .returning();
-    await audit(tx, { userId: actor.userId, action: "update", tableName: "class_teachers", recordId: data.id, oldValue: before, newValue: row });
-    return row!;
-  });
-}
-export async function unassignTeacher(actor: Actor, id: string) {
-  assertCan(actor, "classes", "edit");
-  await db.transaction(async (tx) => {
-    const [before] = await tx.select().from(classTeachers).where(eq(classTeachers.id, id)).limit(1);
-    if (!before) throw notFound();
-    await assertClassAccess(actor, before.classId, tx);
-    await tx.delete(classTeachers).where(eq(classTeachers.id, id));
-    await audit(tx, { userId: actor.userId, action: "delete", tableName: "class_teachers", recordId: id, oldValue: before });
-  });
 }
 
 /**

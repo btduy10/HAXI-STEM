@@ -23,6 +23,11 @@ export function nextWeekRange(today: string): { from: string; to: string } {
   return { from, to: addDays(from, 6) };
 }
 
+/** Khoảng lịch mẫu tự sinh buổi: từ hôm nay đến hết Chủ nhật tuần sau. */
+export function upcomingRange(today: string): { from: string; to: string } {
+  return { from: today, to: nextWeekRange(today).to };
+}
+
 export function addMonths(iso: string, months: number): string {
   const d = toUtc(startOfMonth(iso));
   d.setUTCMonth(d.getUTCMonth() + months);

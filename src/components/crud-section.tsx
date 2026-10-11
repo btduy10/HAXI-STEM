@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/link-button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { type ActionFn, type Field, FormDialog } from "./form-dialog";
+import { type ActionFn, type Field, FormDialog, showWarnings } from "./form-dialog";
 
 export type CrudRow = {
   id: string;
@@ -79,8 +79,9 @@ export function CrudSection({
     if (!deleteAction || !window.confirm(`Xóa "${row.label ?? row.cells[0]}"? ${note}Thao tác này không hoàn tác được.`)) return;
     startTransition(async () => {
       const result = await deleteAction({ id: row.id });
-      if (result.ok) toast.success("Đã xóa.");
-      else toast.error(result.error);
+      if (!result.ok) return void toast.error(result.error);
+      toast.success("Đã xóa.");
+      showWarnings(result.data);
     });
   }
 

@@ -7,8 +7,6 @@ import {
   accountEditInput,
   accountInput,
   classInput,
-  classTeacherInput,
-  classTeacherUpdate,
   classUpdate,
   courseInput,
   courseUpdate,
@@ -116,16 +114,6 @@ export const deleteClassAction = async (input: unknown) =>
 
 // classId được gắn sẵn bằng .bind() ở trang; vẫn đi qua Zod và kiểm tra quyền như mọi dữ liệu từ client.
 const withClassId = (classId: unknown, input: unknown) => ({ ...(typeof input === "object" ? input : null), classId });
-
-export const assignTeacherAction = async (classId: unknown, input: unknown) =>
-  runAction(classTeacherInput, withClassId(classId, input), classes.assignTeacher, ADMIN);
-export const updateClassTeacherAction = async (input: unknown) => {
-  // Form sửa dùng chung gửi { id, data }.
-  const value = (typeof input === "object" && input ? input : {}) as { id?: unknown; data?: unknown };
-  return runAction(classTeacherUpdate, { ...(typeof value.data === "object" ? value.data : null), id: value.id }, classes.updateClassTeacher, ADMIN);
-};
-export const unassignTeacherAction = async (input: unknown) =>
-  runAction(idOnly, input, (a, d) => classes.unassignTeacher(a, d.id), ADMIN);
 
 export const enrollStudentAction = async (classId: unknown, input: unknown) =>
   runAction(enrollInput, withClassId(classId, input), classes.enrollStudent, ADMIN);

@@ -4,6 +4,7 @@ import { assertClassAccess, assertSessionAccess } from "@/server/guard";
 import * as accounts from "@/server/services/accounts";
 import * as catalog from "@/server/services/catalog";
 import * as classes from "@/server/services/classes";
+import * as schedule from "@/server/services/sessions";
 import * as students from "@/server/services/students";
 import { db } from "@/db";
 import { classes as classesTable, sessions, teachers as teachersTable } from "@/db/schema";
@@ -120,18 +121,23 @@ describe("chức năng chỉ dành cho Admin", () => {
     await expect(
       classes.enrollStudent(f.actorA, { classId: f.classA.id, studentId: f.students[4]!.id, joinedAt: "2026-01-10" }),
     ).rejects.toMatchObject(denied);
-    await expect(
-      classes.assignTeacher(f.actorA, { classId: f.classB.id, teacherId: f.teacherA.id, role: "main" }),
-    ).rejects.toMatchObject(denied);
     await expect(classes.deleteClass(f.actorA, f.classA.id)).rejects.toMatchObject(denied);
     await expect(accounts.listAccounts(f.actorA)).rejects.toMatchObject(denied);
     await expect(accounts.resetAccountPassword(f.actorA, f.admin.userId, "MatKhauMoi123")).rejects.toMatchObject(denied);
     await expect(accounts.setAccountLocked(f.actorA, f.actorB.userId, true)).rejects.toMatchObject(denied);
   });
 
-  it("GV không tự phân công mình vào lớp khác được", async () => {
+  it("GV không tự ghi mình vào lịch mẫu của lớp khác được (phân công nằm ở lịch mẫu)", async () => {
     await expect(
-      classes.assignTeacher(f.actorA, { classId: f.classB.id, teacherId: f.teacherA.id, role: "assistant" }),
+      schedule.createTemplate(f.actorA, {
+        classId: f.classB.id,
+        weekday: 2,
+        timeSlotId: f.classB.id,
+        teacherId: f.teacherA.id,
+        assistantTeacherId: null,
+        startTime: null,
+        endTime: null,
+      }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(classes.getClass(f.actorA, f.classB.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });

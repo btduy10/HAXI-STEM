@@ -128,7 +128,8 @@ describe("trùng lịch theo ca + khung giờ", () => {
   beforeEach(async () => {
     [room2] = (await db.insert(rooms).values({ name: "Lab 2", capacity: 10 }).returning()) as [typeof rooms.$inferSelect];
     await template(f.classA.id, 2, morning.id);
-    await template(f.classB.id, 2, morning.id, { roomId: room2.id });
+    await db.update(classes).set({ defaultRoomId: room2.id }).where(eq(classes.id, f.classB.id));
+    await template(f.classB.id, 2, morning.id);
     await svc.generateSessions(f.admin, f.classA.id);
     await svc.generateSessions(f.admin, f.classB.id);
     a = (await sessionsOf(f.classA.id))[0]!; // 06/01 08:00–09:30, GV A, Lab
@@ -229,7 +230,7 @@ describe("trùng lịch theo ca + khung giờ", () => {
 
     // Cùng ngày, cùng ca + khung giờ: trùng phòng Lab → chặn.
     await expect(
-      svc.createManualSession(f.admin, { classId: f.classB.id, date: "2026-01-07", timeSlotId: late.id, teacherId: null, roomId: null }),
+      svc.createManualSession(f.admin, { classId: f.classB.id, date: "2026-01-07", timeSlotId: late.id, teacherId: null, roomId: f.room.id }),
     ).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("Phòng") });
     // Đổi phòng nhưng chọn GV A đang dạy khung đó → trùng GV.
     await expect(
@@ -266,7 +267,7 @@ describe("trùng lịch theo ca + khung giờ", () => {
     await expect(edit(a, {}).then(() => svc.updateSession(f.actorA, { id: a.id, startTime: "07:00", endTime: "08:00", roomId: null, teacherId: null, assistantTeacherId: null, content: null, note: null }))).rejects.toMatchObject(denied);
     await expect(svc.cancelSession(f.actorA, { id: a.id, note: null })).rejects.toMatchObject(denied);
     await expect(svc.setSubstitute(f.actorA, { id: b.id, substituteTeacherId: f.teacherA.id })).rejects.toMatchObject(denied);
-    await expect(svc.createTemplate(f.actorA, { classId: f.classA.id, weekday: 1, timeSlotId: morning.id, roomId: null, teacherId: null, assistantTeacherId: null, startTime: null, endTime: null })).rejects.toMatchObject(denied);
+    await expect(svc.createTemplate(f.actorA, { classId: f.classA.id, weekday: 1, timeSlotId: morning.id, teacherId: f.teacherA.id, assistantTeacherId: null, startTime: null, endTime: null })).rejects.toMatchObject(denied);
     await expect(attendance.unlockAttendance(f.actorA, a.id)).rejects.toMatchObject(denied);
   });
 
@@ -440,8 +441,7 @@ describe("lịch mẫu bị lặp trong cùng một lớp", () => {
     classId: f.classA.id,
     weekday,
     timeSlotId,
-    roomId: null,
-    teacherId: null,
+    teacherId: f.teacherA.id,
     assistantTeacherId: null,
     startTime: null,
     endTime: null,
@@ -456,7 +456,7 @@ describe("lịch mẫu bị lặp trong cùng một lớp", () => {
     await svc.createTemplate(f.admin, input(4, morning.id));
     const rows = await db.select().from(scheduleTemplates).where(eq(scheduleTemplates.classId, f.classA.id));
     const thursday = rows.find((r) => r.weekday === 4)!;
-    const fields = { weekday: 2, timeSlotId: morning.id, roomId: null, teacherId: null, assistantTeacherId: null, startTime: null, endTime: null };
+    const fields = { weekday: 2, timeSlotId: morning.id, teacherId: f.teacherA.id, assistantTeacherId: null, startTime: null, endTime: null };
     await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields })).rejects.toMatchObject({ code: "VALIDATION" });
     // Sửa chính nó (giữ nguyên thứ, khung) thì không tự báo trùng.
     await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields, weekday: 4, teacherId: f.teacherA.id })).resolves.toBeDefined();

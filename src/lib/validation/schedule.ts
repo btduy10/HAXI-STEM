@@ -11,7 +11,7 @@ const startBeforeEnd = { path: ["endTime"], message: "Giờ kết thúc phải s
 const templateFields = {
   weekday: intIn(1, 7),
   timeSlotId: id,
-  roomId: optId,
+  // Không có phòng: buổi của lớp luôn dùng phòng đã chọn khi tạo lớp.
   teacherId: optId,
   assistantTeacherId: optId,
   startTime: optTime,
@@ -30,8 +30,6 @@ export const templateUpdateInput = z
   .object({ id, ...templateFields })
   .refine(bothOrNeither, bothOrNeitherMessage)
   .refine((v) => !v.startTime || !v.endTime || v.startTime < v.endTime, startBeforeEnd);
-
-export const classIdInput = z.object({ classId: id });
 
 /** Sửa riêng một buổi: giờ, phòng, GV, nội dung. */
 export const sessionEditInput = z

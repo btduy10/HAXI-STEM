@@ -204,6 +204,13 @@
       "when": 1791717142322,
       "tag": "0028_weekly_session_generation",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791732331194,
+      "tag": "0029_template_teachers",
+      "breakpoints": true
     }
   ]
 }

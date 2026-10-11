@@ -146,18 +146,6 @@ export const classInput = z
   })
   .refine((v) => v.startDate <= v.endDate, { path: ["endDate"], message: "Ngày kết thúc phải sau ngày bắt đầu" });
 
-export const classTeacherInput = z.object({
-  classId: id,
-  teacherId: id,
-  role: z.enum(["main", "assistant"]).default("main"),
-});
-
-/** Sửa phân công: đổi vai trò (Dạy chính / Trợ giảng). */
-export const classTeacherUpdate = z.object({
-  id,
-  role: z.enum(["main", "assistant"]),
-});
-
 /** Mức lương mỗi buổi (đồng) của một giáo viên/trợ giảng ở một lớp. */
 export const teacherRateInput = z.object({
   teacherId: id,

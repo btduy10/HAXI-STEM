@@ -5,15 +5,13 @@ import { CrudSection } from "@/components/crud-section";
 import type { Field } from "@/components/form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/link-button";
-import { GenerateSessionsButton } from "@/components/generate-sessions-button";
-import { WEEKDAY_LABELS, isoWeekday, startOfWeek } from "@/lib/dates";
-import { LABELS, formatDate, formatTime, toOptions, todayIso } from "@/lib/format";
-import { assignTeacherAction, unassignTeacherAction, updateClassTeacherAction } from "@/server/actions/admin";
+import { WEEKDAY_LABELS } from "@/lib/dates";
+import { LABELS, formatDate, formatTime } from "@/lib/format";
 import { createTemplateAction, deleteTemplateAction, updateTemplateAction } from "@/server/actions/schedule";
 import { orNotFound, uuidParam } from "@/server/page";
-import { listRooms, listTeachers, listTimeSlots } from "@/server/services/catalog";
-import { getClass, listClassTeachers } from "@/server/services/classes";
-import { classScheduleOverview, listTemplates, nextSessionDate } from "@/server/services/sessions";
+import { listTeachers, listTimeSlots } from "@/server/services/catalog";
+import { getClass } from "@/server/services/classes";
+import { listTemplates } from "@/server/services/sessions";
 import { listClassStars } from "@/server/services/stars";
 import { requireMenu } from "@/server/session";
 
@@ -21,48 +19,26 @@ export const metadata: Metadata = { title: "Chi tiết lớp" };
 
 export default async function ClassDetailPage({ params }: PageProps<"/admin/classes/[id]">) {
   const { actor, can } = await requireMenu("classes");
-  // Phân công giáo viên, lịch mẫu và sinh buổi đều thuộc quyền "Sửa" của menu Lớp học.
+  // Lịch mẫu (cũng là nơi phân công giáo viên) thuộc quyền "Sửa" của menu Lớp học.
   const canEdit = can("edit");
   const classId = uuidParam((await params).id);
   const cls = await orNotFound(getClass(actor, classId));
-  // Lớp chỉ hiển thị trên Thời khóa biểu (vd. cho mượn phòng) không có học viên: trang chỉ còn giáo viên, lịch mẫu, buổi học.
+  // Lớp chỉ hiển thị trên Thời khóa biểu (vd. cho mượn phòng) không có học viên: trang chỉ còn lịch mẫu.
   const tracksStudents = !cls.timetableOnly;
-  const [assigned, teachers, students, templates, slots, rooms] = await Promise.all([
-    listClassTeachers(actor, classId),
+  const [teachers, students, templates, slots] = await Promise.all([
     listTeachers(actor),
     tracksStudents ? listClassStars(actor, classId) : [],
     listTemplates(actor, classId),
     listTimeSlots(actor),
-    listRooms(actor),
   ]);
 
-  // "Xem thời khóa biểu lớp" mở tuần hiện tại nếu lớp có buổi trong tuần này; nếu không thì tuần có buổi sắp tới. Lọc theo lớp.
-  const [timetableDate, overview] = await Promise.all([
-    can("view", "timetable") ? nextSessionDate(actor, classId, startOfWeek(todayIso())) : null,
-    classScheduleOverview(actor, classId),
-  ]);
-  const timetableHref = `/admin/timetable?${new URLSearchParams({ view: "week", classId, ...(timetableDate ? { date: timetableDate } : {}) })}`;
+  // Giáo viên để chọn: người đang dạy, cộng người đã có tên trong lịch mẫu của lớp (để sửa dòng cũ không mất tên).
+  const inTemplates = new Set(templates.flatMap((t) => [t.teacherId, t.assistantTeacherId]));
+  const teacherOptions = teachers
+    .filter((t) => t.status === "active" || inTemplates.has(t.id))
+    .map((t) => ({ value: t.id, label: `${t.code} – ${t.fullName}` }));
 
-  const assignedIds = new Set(assigned.map((a) => a.teacherId));
-  // Mức lương không đặt ở đây: xem Chấm công → Mức lương giáo viên/Nhân viên.
-  const roleFields: Field[] = [
-    { name: "role", label: "Vai trò", type: "select", required: true, options: toOptions(LABELS.classTeacherRole), defaultValue: "main" },
-  ];
-  const teacherFields: Field[] = [
-    {
-      name: "teacherId",
-      label: "Giáo viên",
-      type: "select",
-      required: true,
-      options: teachers
-        .filter((t) => t.status === "active" && !assignedIds.has(t.id))
-        .map((t) => ({ value: t.id, label: `${t.code} – ${t.fullName}` })),
-    },
-    ...roleFields,
-  ];
-  const assignedOf = (role: "main" | "assistant") =>
-    assigned.filter((a) => a.role === role).map((a) => ({ value: a.teacherId, label: `${a.code} – ${a.fullName}` }));
-
+  // Không có ô Phòng: buổi của lớp dùng phòng đã chọn khi tạo lớp.
   const templateFields: Field[] = [
     {
       name: "weekday",
@@ -78,30 +54,13 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
       required: true,
       options: slots.map((s) => ({ value: s.id, label: `${s.name} (${formatTime(s.defaultStart)}–${formatTime(s.defaultEnd)})` })),
     },
-    {
-      name: "roomId",
-      label: "Phòng",
-      type: "select",
-      options: rooms.map((r) => ({ value: r.id, label: `${r.name} (${r.capacity} chỗ)` })),
-      hint: "Không chọn = phòng mặc định của lớp.",
-    },
-    {
-      name: "teacherId",
-      label: "Giáo viên chính",
-      type: "select",
-      options: assignedOf("main"),
-      hint: "Không chọn = GV chính đầu tiên của lớp. Chỉ liệt kê GV đã phân công vai trò GV chính.",
-    },
-    {
-      name: "assistantTeacherId",
-      label: "Trợ giảng (nếu có)",
-      type: "select",
-      options: assignedOf("assistant"),
-      hint: "Chỉ liệt kê GV đã phân công vai trò Trợ giảng.",
-    },
+    // Phân công nằm ở lịch mẫu: lớp thường phải chọn giáo viên chính (máy chủ kiểm tra lại).
+    { name: "teacherId", label: "Giáo viên chính", type: "select", required: tracksStudents, options: teacherOptions },
+    { name: "assistantTeacherId", label: "Trợ giảng (nếu có)", type: "select", options: teacherOptions },
   ];
 
-  return (    <div className="grid gap-6">
+  return (
+    <div className="grid gap-6">
       <div className="grid gap-2">
         <BackLink href="/admin/classes">Danh sách lớp</BackLink>
         <div className="flex flex-wrap items-center gap-2">
@@ -139,39 +98,20 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
       </div>
 
       <CrudSection
-        title="Giáo viên phụ trách"
-        addLabel="Phân công"
-        columns={["Họ tên", "Mã GV", "Vai trò"]}
-        rows={assigned.map((a) => ({
-          id: a.id,
-          cells: [a.fullName, a.code, LABELS.classTeacherRole[a.role]],
-          values: { role: a.role },
-        }))}
-        fields={teacherFields}
-        editFields={roleFields}
-        createAction={canEdit ? assignTeacherAction.bind(null, classId) : undefined}
-        updateAction={canEdit ? updateClassTeacherAction : undefined}
-        deleteAction={canEdit ? unassignTeacherAction : undefined}
-        emptyText="Chưa phân công giáo viên."
-      />
-
-      <CrudSection
         title="Lịch mẫu hằng tuần"
         addLabel="Thêm"
-        columns={["Thứ", "Ca", "Phòng", "GV chính", "Trợ giảng"]}
+        columns={["Thứ", "Ca", "GV chính", "Trợ giảng"]}
         rows={templates.map((t) => ({
           id: t.id,
           cells: [
             WEEKDAY_LABELS[t.weekday] ?? "",
             `${t.slotName} (${formatTime(t.startTime ?? t.slotStart)}–${formatTime(t.endTime ?? t.slotEnd)})`,
-            t.roomName ?? "Phòng mặc định",
-            t.teacherName ?? "GV chính của lớp",
+            t.teacherName ?? "",
             t.assistantName ?? "",
           ],
           values: {
             weekday: String(t.weekday),
             timeSlotId: t.timeSlotId,
-            roomId: t.roomId ?? "",
             teacherId: t.teacherId ?? "",
             assistantTeacherId: t.assistantTeacherId ?? "",
           },
@@ -180,70 +120,14 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
         createAction={canEdit ? createTemplateAction.bind(null, classId) : undefined}
         updateAction={canEdit ? updateTemplateAction : undefined}
         deleteAction={canEdit ? deleteTemplateAction : undefined}
-        emptyText="Chưa có lịch mẫu. Thêm các buổi học trong tuần của lớp, rồi bấm “Sinh buổi học tuần sau”."
+        deleteNote="Các buổi chưa dạy của dòng này từ hôm nay đến hết tuần sau cũng bị bỏ khỏi Thời khóa biểu."
+        emptyText="Chưa có lịch mẫu. Thêm các buổi học trong tuần của lớp; Thời khóa biểu tự có buổi từ hôm nay đến hết tuần sau."
       />
-
-      <section className="grid gap-2">
-        <h2 className="text-lg font-semibold">Buổi học</h2>
-        <p className="text-sm text-muted-foreground">
-          Buổi học được sinh theo từng tuần, vì mỗi tuần thứ và ca học của lớp có thể đổi: chỉnh lịch mẫu nếu cần rồi bấm nút dưới đây để
-          xếp các buổi của tuần sau theo lịch mẫu (đúng thứ, ca, phòng, GV chính và trợ giảng), trong thời gian {formatDate(cls.startDate)} –{" "}
-          {formatDate(cls.endDate)} của lớp, bỏ ngày nghỉ. Sửa lịch mẫu không làm đổi các buổi đã có; buổi đã điểm danh, đã ghi sao, đã hủy và
-          các tuần khác giữ nguyên.
-        </p>
-        <p className="text-sm" data-next-week>
-          Tuần sau ({formatDate(overview.nextWeek.from)} – {formatDate(overview.nextWeek.to)}):{" "}
-          {overview.nextWeek.count > 0 ? (
-            <>
-              đã có <strong>{overview.nextWeek.count}</strong> buổi.
-            </>
-          ) : (
-            "chưa sinh buổi."
-          )}
-        </p>
-        {overview.scheduled + overview.makeup > 0 ? (
-          <div className="grid gap-2 glass-solid rounded-xl border p-3 text-sm">
-            <p>
-              Đã xếp <strong>{overview.scheduled}</strong> buổi
-              {overview.first && overview.last && (
-                <>
-                  , từ {WEEKDAY_LABELS[isoWeekday(overview.first.date)]} {formatDate(overview.first.date)} đến{" "}
-                  {WEEKDAY_LABELS[isoWeekday(overview.last.date)]} {formatDate(overview.last.date)}
-                </>
-              )}
-              . Đã dạy {overview.done} buổi
-              {overview.makeup > 0 && ` · ${overview.makeup} buổi bù`}
-              {overview.cancelled > 0 && ` · ${overview.cancelled} buổi đã hủy`}.
-            </p>
-            {tracksStudents && overview.missingTeacher > 0 && (
-              <p className="text-destructive">
-                {overview.missingTeacher} buổi chưa có giáo viên. Hãy phân công GV chính cho lớp hoặc chọn GV trong lịch mẫu trước khi sinh buổi tuần
-                sau; buổi đã có thì sửa giáo viên ở Thời khóa biểu.
-              </p>
-            )}
-          </div>
-        ) : (
-          <p className="rounded-2xl border border-dashed p-3 text-sm text-muted-foreground">Lớp chưa có buổi học nào. Thêm lịch mẫu rồi bấm “Sinh buổi học tuần sau”.</p>
-        )}
-        <div className="flex flex-wrap items-start gap-2">
-          {canEdit && (
-            <GenerateSessionsButton
-              classId={classId}
-              disabled={templates.length === 0 || cls.status !== "open"}
-            />
-          )}
-          {can("view", "timetable") && (
-            <LinkButton variant="outline" className="h-10" href={timetableHref}>
-              Xem thời khóa biểu lớp
-            </LinkButton>
-          )}
-          {cls.status === "open" && can("add", "timetable") && (
-            <LinkButton variant="outline" className="h-10" href={`/admin/sessions/makeup?classId=${classId}`}>
-              Thêm buổi bù
-            </LinkButton>
-          )}
-        </div>
-      </section>
+      <p className="-mt-3 text-sm text-muted-foreground">
+        Thêm, sửa, xóa dòng lịch mẫu là các buổi chưa dạy của lớp từ hôm nay đến hết tuần sau tự xếp theo
+        {cls.roomName ? `, tại ${cls.roomName}` : ""}; buổi đã điểm danh, đã hủy, đã dời hoặc sửa tay ở Thời khóa biểu giữ nguyên. Các tuần
+        sau được bổ sung bởi tác vụ hằng ngày hoặc nút “Sinh lịch tuần sau” ở Thời khóa biểu.
+      </p>
 
       {tracksStudents && (
         <section className="grid gap-3">

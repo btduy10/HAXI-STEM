@@ -5,7 +5,6 @@ import { z } from "zod";
 import { idOnly } from "@/lib/validation/common";
 import {
   attendanceInput,
-  classIdInput,
   makeupInput,
   manualSessionInput,
   sessionCancelInput,
@@ -35,9 +34,6 @@ export const updateTemplateAction = async (input: unknown) =>
   runAction(templateUpdateInput, flatten(input), (a, d) => sessions.updateTemplate(a, d), ADMIN);
 export const deleteTemplateAction = async (input: unknown) =>
   runAction(idOnly, input, (a, d) => sessions.deleteTemplate(a, d.id), ADMIN);
-/** Trang chi tiết lớp: xếp lại tuần sau của một lớp theo lịch mẫu. */
-export const generateNextWeekAction = async (input: unknown) =>
-  runAction(classIdInput, input, (a, d) => sessions.generateNextWeek(a, d.classId), ADMIN);
 /** Thời khóa biểu: bổ sung buổi tuần sau cho mọi lớp đang mở trong phạm vi của người bấm. */
 export const generateNextWeekForAllAction = async () => runAction(noInput, {}, (a) => sessions.generateNextWeekForAll(a), ADMIN);
 
