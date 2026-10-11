@@ -615,6 +615,36 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
     await expect(sessionRows.filter({ hasText: "Đã xếp bù" })).toHaveCount(1);
     await expect(sessionRows.filter({ hasText: "Lắp ráp thử" })).toHaveCount(0);
     await expectNoHorizontalScroll(page);
+
+    // Admin xóa lịch sử học: nút Xóa ở từng dòng và Xóa hết ở hai mục, luôn hỏi xác nhận.
+    const accept = (has: string) =>
+      page.once("dialog", (confirm) => {
+        expect(confirm.message()).toContain(has);
+        expect(confirm.message()).toContain("Không hoàn tác được.");
+        void confirm.accept();
+      });
+    await expect(page.getByRole("button", { name: "Xóa hết chương trình học" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Xóa hết lịch sử buổi học" })).toBeVisible();
+    await expect(sessionRows.getByRole("button", { name: /^Xóa buổi \d{2}\/\d{2}\/\d{4} Lớp thử học bù$/ })).toHaveCount(2);
+    await page.screenshot({ path: "test-results/shots/student-history-delete-360.png", fullPage: true });
+    // Xóa một bài ở Chương trình học = xóa buổi em đã học bài đó: mất ở cả hai mục, số buổi đã học của khóa cũng mất.
+    accept(`khỏi chương trình học của ${WAITING}`);
+    await lessonRow.getByRole("button", { name: /^Xóa bài/ }).click();
+    await expect(page.getByText("Đã xóa bài khỏi chương trình học.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^Chương trình học/ })).toContainText("0 bài đã học");
+    await expect(page.getByRole("button", { name: "Xóa hết chương trình học" })).toHaveCount(0);
+    await expect(page.locator("[data-progress]")).toHaveCount(0);
+    await expect(sessionRows).toHaveCount(1);
+    // Xóa hết lịch sử buổi học: buổi vắng đã xếp bù cũng mất, lượt xếp bù bị bỏ nên buổi học bù rời khỏi Lịch học.
+    accept(`Xóa hết lịch sử buổi học của ${WAITING}`);
+    await page.getByRole("button", { name: "Xóa hết lịch sử buổi học" }).click();
+    await expect(page.getByText("Đã xóa lịch sử buổi học.")).toBeVisible();
+    await expect(page.getByText("Chưa có buổi nào được điểm danh.")).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Xóa/ })).toHaveCount(0);
+    await expect(makeupRow).toHaveCount(0);
+    expect(await db`select id from attendances where student_id = ${student!.id}`).toHaveLength(0);
+    expect(await db`select id from makeup_assignments where student_id = ${student!.id}`).toHaveLength(0);
+    await expectNoHorizontalScroll(page);
     await page.goto(`/admin/students?q=${firstCode}`);
     await expect(page.getByText(WAITING).first()).toBeVisible();
     await expect(page.getByText("Sao:").first()).toBeVisible();

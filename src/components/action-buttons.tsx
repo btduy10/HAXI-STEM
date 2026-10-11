@@ -65,8 +65,11 @@ export function ConfirmButton({
   variant = "outline",
   successMessage = "Đã thực hiện.",
   className,
+  ariaLabel,
 }: {
   label: string;
+  /** Tên đầy đủ cho trình đọc màn hình khi nhiều nút cùng nhãn nằm trong một danh sách (vd. "Xóa" ở từng dòng). */
+  ariaLabel?: string;
   confirmText: string;
   action: ActionFn;
   input: unknown;
@@ -85,7 +88,7 @@ export function ConfirmButton({
     });
   }
   return (
-    <Button type="button" variant={variant} className={className ?? "h-10"} disabled={pending} onClick={run}>
+    <Button type="button" variant={variant} className={className ?? "h-10"} aria-label={ariaLabel} disabled={pending} onClick={run}>
       {label}
     </Button>
   );

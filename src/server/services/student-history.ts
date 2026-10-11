@@ -1,13 +1,17 @@
-import { and, between, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, between, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import type { z } from "zod";
 import { db } from "@/db";
-import { attendances, classes, courses, enrollments, makeupAssignments, rooms, sessionStudents, sessions, teachers } from "@/db/schema";
+import { attendances, classes, courses, enrollments, makeupAssignments, rooms, sessionStudents, sessions, students, teachers } from "@/db/schema";
 import { isAbsence, makeupState } from "@/domain/makeup";
 import { parseLessonLabel } from "@/domain/syllabus";
 import { addDays } from "@/lib/dates";
 import { todayIso } from "@/lib/format";
-import { type Actor, allowedClassIds } from "../guard";
-import { assertStudentAccess, starTotalsOf } from "./stars";
+import type { studentHistoryDelete } from "@/lib/validation/entities";
+import { audit } from "../audit";
+import { AppError, notFound } from "../errors";
+import { type Actor, allowedClassIds, assertAdmin } from "../guard";
+import { assertStudentAccess, purgeStudentStarLogs, starTotalsOf } from "./stars";
 import { listStudentsPage } from "./students";
 
 const madeUpIn = alias(makeupAssignments, "made_up_in");
@@ -134,18 +138,25 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
 
   // Bài đã học: buổi em có mặt và đã ghi nội dung; lấy lần học đầu tiên của mỗi bài.
   const normalize = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
-  const firstLearned = new Map<string, { row: (typeof history)[number]; content: string; lesson: ReturnType<typeof parseLessonLabel> }>();
+  const firstLearned = new Map<
+    string,
+    { row: (typeof history)[number]; content: string; lesson: ReturnType<typeof parseLessonLabel>; sessionIds: string[] }
+  >();
   for (const row of [...history].reverse()) {
     const content = row.content?.trim();
     if (!row.attended || !content) continue;
     // `lesson`: bài chọn từ Syllabus (có số buổi, và tên khóa nếu là nhãn mới); null khi giáo viên tự gõ nội dung.
     const lesson = parseLessonLabel(content);
     const key = lesson?.courseName ? `course|${normalize(lesson.courseName)}|${lesson.period}` : `class|${row.classId}|${content}`;
-    if (!firstLearned.has(key)) firstLearned.set(key, { row, content, lesson });
+    const learned = firstLearned.get(key);
+    if (learned) learned.sessionIds.push(row.sessionId);
+    else firstLearned.set(key, { row, content, lesson, sessionIds: [row.sessionId] });
   }
   const lessons = [...firstLearned.values()]
-    .map(({ row, content, lesson }) => ({
+    .map(({ row, content, lesson, sessionIds }) => ({
       sessionId: row.sessionId,
+      // Mọi buổi em đã học bài này (học lại, học bù): xóa bài khỏi chương trình học là xóa lịch sử của em ở các buổi đó.
+      sessionIds,
       classCode: row.classCode,
       className: row.className,
       date: row.date,
@@ -189,6 +200,55 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
       makeup: isAbsence(row.status) ? makeupState(makeupAssigned && makeupSessionStatus ? { sessionStatus: makeupSessionStatus, attendance: madeUp } : null) : null,
     })),
   };
+}
+
+/**
+ * Xóa lịch sử học của một học viên ở các buổi cho trước (chỉ Admin): điểm danh của em, các lần ghi sao của em trong buổi
+ * và lượt xếp học bù của em gắn với buổi (buổi vắng được bù hoặc buổi em học bù). `sessionIds` = "all": mọi buổi em đã
+ * được điểm danh. Buổi học và điểm danh của học viên khác giữ nguyên. Buổi của lớp đã đóng không xóa (tổng kết đã chốt).
+ */
+export async function deleteStudentHistory(actor: Actor, data: z.output<typeof studentHistoryDelete>) {
+  assertAdmin(actor);
+  return db.transaction(async (tx) => {
+    const [student] = await tx.select({ id: students.id }).from(students).where(eq(students.id, data.studentId)).for("update").limit(1);
+    if (!student) throw notFound("học viên");
+    const rows = await tx
+      .select({ sessionId: attendances.sessionId, status: attendances.status, classStatus: classes.status })
+      .from(attendances)
+      .innerJoin(sessions, eq(sessions.id, attendances.sessionId))
+      .innerJoin(classes, eq(classes.id, sessions.classId))
+      .where(and(eq(attendances.studentId, data.studentId), data.sessionIds === "all" ? undefined : inArray(attendances.sessionId, data.sessionIds)));
+    if (rows.length === 0) throw notFound("buổi học đã điểm danh của học viên");
+    const targets = rows.filter((r) => r.classStatus !== "closed");
+    const kept = rows.length - targets.length;
+    if (targets.length === 0) throw new AppError("CONFLICT", "Buổi học thuộc lớp đã đóng (đã chốt tổng kết) nên không xóa được.");
+
+    const sessionIds = targets.map((r) => r.sessionId);
+    const removed = await tx
+      .delete(attendances)
+      .where(and(eq(attendances.studentId, data.studentId), inArray(attendances.sessionId, sessionIds)))
+      .returning({ id: attendances.id });
+    const deletedStarLogs = await purgeStudentStarLogs(tx, actor, data.studentId, sessionIds);
+    const makeups = await tx
+      .delete(makeupAssignments)
+      .where(
+        and(
+          eq(makeupAssignments.studentId, data.studentId),
+          or(inArray(makeupAssignments.absentSessionId, sessionIds), inArray(makeupAssignments.makeupSessionId, sessionIds)),
+        ),
+      )
+      .returning({ id: makeupAssignments.id });
+    const counts = { deletedAttendances: removed.length, deletedStarLogs, deletedMakeups: makeups.length };
+    await audit(tx, {
+      userId: actor.userId,
+      action: "delete",
+      tableName: "attendances",
+      recordId: data.studentId,
+      oldValue: targets.map(({ sessionId, status }) => ({ sessionId, status })),
+      newValue: counts,
+    });
+    return { ...counts, warnings: kept > 0 ? [`Giữ lại ${kept} buổi của lớp đã đóng (đã chốt tổng kết).`] : [] };
+  });
 }
 
 /** Danh sách học viên theo trang kèm tổng sao tích lũy của từng em. */

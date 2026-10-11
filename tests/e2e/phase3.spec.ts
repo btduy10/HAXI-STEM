@@ -70,6 +70,8 @@ test("GV ghi sao trên điện thoại: một em, cả lớp, giới hạn trừ
   await expect(page.getByRole("heading", { name: /Lịch sử buổi học/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Lịch sử ghi sao/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Xóa hết" })).toHaveCount(0);
+  // Xóa lịch sử học (từng dòng hoặc xóa hết) chỉ có ở hồ sơ do Admin mở.
+  await expect(page.getByRole("button", { name: /^Xóa/ })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Avatar" })).toHaveCount(0);
   await expect(page.getByRole("img", { name: /^Avatar / })).toHaveCount(0);
   await expect(page.getByRole("progressbar")).toHaveCount(0);

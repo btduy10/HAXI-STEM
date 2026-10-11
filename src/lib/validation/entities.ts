@@ -167,6 +167,12 @@ export const leaveInput = z.object({
   leftAt: isoDate,
 });
 
+/** Xóa lịch sử học của một học viên ở các buổi cho trước; "all" = mọi buổi em đã được điểm danh. */
+export const studentHistoryDelete = z.object({
+  studentId: id,
+  sessionIds: z.union([z.literal("all"), z.array(id).min(1).max(500)]),
+});
+
 /** Sửa ngày vào lớp của một lượt ghi danh. */
 export const joinDateInput = z.object({
   id,

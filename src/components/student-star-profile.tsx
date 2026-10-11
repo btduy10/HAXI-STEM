@@ -7,6 +7,7 @@ import { lessonTitle } from "@/domain/syllabus";
 import { isoWeekday } from "@/lib/dates";
 import { LABELS, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { deleteStudentHistoryAction } from "@/server/actions/admin";
 import { cancelRedemptionAction, redeemGiftAction } from "@/server/actions/rewards";
 import type { Actor } from "@/server/guard";
 import { orNotFound } from "@/server/page";
@@ -27,6 +28,7 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
     getStudentSchedule(actor, studentId),
   ]);
   const admin = actor.role === "admin";
+  const irreversible = "Không hoàn tác được.";
 
   return (
     <div className="mx-auto grid max-w-3xl gap-6">
@@ -163,9 +165,24 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
       </section>
 
       <section className="grid gap-2" aria-labelledby="lessons-title">
-        <h2 id="lessons-title" className="font-medium">
-          Chương trình học <span className="text-sm font-normal text-muted-foreground">({history.lessons.length} bài đã học)</span>
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id="lessons-title" className="font-medium">
+            Chương trình học <span className="text-sm font-normal text-muted-foreground">({history.lessons.length} bài đã học)</span>
+          </h2>
+          {/* Chương trình học tính từ các buổi em có mặt: xóa bài là xóa lịch sử của em ở các buổi đã học bài đó (chỉ Admin). */}
+          {admin && history.lessons.length > 0 && (
+            <ConfirmButton
+              label="Xóa hết"
+              ariaLabel="Xóa hết chương trình học"
+              variant="destructive"
+              className="h-9"
+              confirmText={`Xóa hết ${history.lessons.length} bài đã học của ${student.fullName}? Điểm danh và sao của em ở các buổi đã học những bài này bị xóa, lượt xếp học bù gắn với các buổi đó cũng bị bỏ. ${irreversible}`}
+              action={deleteStudentHistoryAction}
+              input={{ studentId, sessionIds: [...new Set(history.lessons.flatMap((l) => l.sessionIds))] }}
+              successMessage="Đã xóa chương trình học."
+            />
+          )}
+        </div>
         {history.lessons.length === 0 ? (
           <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">Chưa có bài nào đã học.</p>
         ) : (
@@ -180,6 +197,18 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
                 <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   {joined(l.className, formatDate(l.date))}
                   {l.isMakeup && <Badge variant="secondary">Học bù</Badge>}
+                  {admin && (
+                    <ConfirmButton
+                      label="Xóa"
+                      ariaLabel={`Xóa bài ${lessonTitle(l.content)}`}
+                      variant="destructive"
+                      className="h-9"
+                      confirmText={`Xóa bài “${lessonTitle(l.content)}” khỏi chương trình học của ${student.fullName}? Điểm danh và sao của em ở ${l.sessionIds.length > 1 ? `${l.sessionIds.length} buổi` : "buổi"} đã học bài này bị xóa, lượt xếp học bù gắn với buổi cũng bị bỏ. ${irreversible}`}
+                      action={deleteStudentHistoryAction}
+                      input={{ studentId, sessionIds: l.sessionIds }}
+                      successMessage="Đã xóa bài khỏi chương trình học."
+                    />
+                  )}
                 </span>
               </li>
             ))}
@@ -188,9 +217,23 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
       </section>
 
       <section className="grid gap-2" aria-labelledby="sessions-title">
-        <h2 id="sessions-title" className="font-medium">
-          Lịch sử buổi học
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 id="sessions-title" className="font-medium">
+            Lịch sử buổi học
+          </h2>
+          {admin && history.sessions.length > 0 && (
+            <ConfirmButton
+              label="Xóa hết"
+              ariaLabel="Xóa hết lịch sử buổi học"
+              variant="destructive"
+              className="h-9"
+              confirmText={`Xóa hết lịch sử buổi học của ${student.fullName}? Toàn bộ điểm danh của em, sao ghi trong các buổi đó và các lượt xếp học bù bị xóa; chương trình học của em cũng trống theo. Buổi của lớp đã đóng được giữ lại. ${irreversible}`}
+              action={deleteStudentHistoryAction}
+              input={{ studentId, sessionIds: "all" }}
+              successMessage="Đã xóa lịch sử buổi học."
+            />
+          )}
+        </div>
         {/* Mỗi khóa em đã học: số buổi khác nhau của khóa em có mặt (kể cả học bù) trên tổng số buổi của khóa. */}
         {history.courses.length > 0 && (
           <ul className="grid gap-0.5 text-sm">
@@ -225,6 +268,18 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
                   {a.isMakeup && <Badge variant="secondary">Học bù</Badge>}
                   {a.makeup && a.makeup !== "pending" && <Badge variant="outline">{MAKEUP_STATE_LABELS[a.makeup]}</Badge>}
                   <Badge variant={a.status === "absent" || a.status === "excused" ? "outline" : "secondary"}>{LABELS.attendanceStatus[a.status]}</Badge>
+                  {admin && (
+                    <ConfirmButton
+                      label="Xóa"
+                      ariaLabel={`Xóa buổi ${formatDate(a.date)} ${a.className}`}
+                      variant="destructive"
+                      className="h-9"
+                      confirmText={`Xóa buổi ${joined(formatDate(a.date), a.className)} khỏi lịch sử của ${student.fullName}? Điểm danh và sao của em ở buổi này bị xóa, lượt xếp học bù gắn với buổi cũng bị bỏ. Buổi học và điểm danh của các bạn khác giữ nguyên. ${irreversible}`}
+                      action={deleteStudentHistoryAction}
+                      input={{ studentId, sessionIds: [a.sessionId] }}
+                      successMessage="Đã xóa buổi khỏi lịch sử."
+                    />
+                  )}
                 </span>
               </li>
             ))}

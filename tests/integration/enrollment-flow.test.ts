@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { attendances, auditLogs, classes, courses, enrollments, makeupAssignments, sessionStudents, sessions, starCriteria, starLogs, students, tuitionReceipts } from "@/db/schema";
 import { lessonTitle } from "@/domain/syllabus";
 import { DEFAULT_PERMISSIONS, type RolePermissions } from "@/lib/permissions";
-import { newEnrollmentInput } from "@/lib/validation/entities";
+import { newEnrollmentInput, studentHistoryDelete } from "@/lib/validation/entities";
 import type { Actor } from "@/server/guard";
 import * as attendanceSvc from "@/server/services/attendance";
 import * as classSvc from "@/server/services/classes";
@@ -501,6 +501,81 @@ describe("QL Học viên: số buổi đã học, chương trình học, lịch 
     expect(await titles(a2())).toEqual(expected);
     // A1 vắng buổi 06/01 nên chưa có bài nào.
     expect(await titles(a1())).toEqual([]);
+  });
+
+  const history = (studentId: string) => historySvc.getStudentLearningHistory(f.admin, studentId);
+  const remove = (studentId: string, sessionIds: string[] | "all", actor: Actor = f.admin) =>
+    historySvc.deleteStudentHistory(actor, { studentId, sessionIds });
+
+  it("Admin xóa một buổi khỏi lịch sử: mất điểm danh, sao của em trong buổi và lượt xếp học bù; học viên khác và buổi học giữ nguyên", async () => {
+    // A1 vắng buổi 06/01 (đã xếp bù vào buổi 15/01 của lớp B); A1 và A2 đều được ghi sao trong buổi.
+    await starSvc.awardStars(f.admin, { sessionId: absent.id, criteriaId: plusThree, studentIds: [a1(), a2()], note: null }, NOW);
+    await assign(target.id);
+    // Chỉ Admin: giáo viên của lớp, kể cả khi được tick đủ quyền QL Học viên và Ghi danh, không xóa được.
+    await expect(remove(a1(), [absent.id], f.actorA)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(remove(a1(), [absent.id], withMenus(f.actorA, { students: ALL, enrollments: ALL }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(studentHistoryDelete.safeParse({ studentId: a1(), sessionIds: [] }).success).toBe(false);
+    expect((await history(a1())).sessions).toHaveLength(1);
+
+    expect(await remove(a1(), [absent.id])).toEqual({ deletedAttendances: 1, deletedStarLogs: 1, deletedMakeups: 1, warnings: [] });
+    expect((await history(a1())).sessions).toEqual([]);
+    expect(await db.select().from(makeupAssignments)).toEqual([]);
+    expect((await starSvc.starTotalsOf(db, [a1(), a2()])).get(a1()) ?? 0).toBe(0);
+    // A2 cùng buổi: điểm danh và sao giữ nguyên; buổi học vẫn còn.
+    expect((await history(a2())).sessions).toEqual([expect.objectContaining({ date: "2026-01-06", status: "present", stars: 3 })]);
+    expect(await db.select().from(sessions).where(eq(sessions.id, absent.id))).toHaveLength(1);
+    const [log] = await db.select().from(auditLogs).where(and(eq(auditLogs.tableName, "attendances"), eq(auditLogs.recordId, a1())));
+    expect(log).toMatchObject({
+      action: "delete",
+      oldValue: [{ sessionId: absent.id, status: "excused" }],
+      newValue: { deletedAttendances: 1, deletedStarLogs: 1, deletedMakeups: 1 },
+    });
+    // Không còn gì để xóa; học viên không tồn tại.
+    await expect(remove(a1(), [absent.id])).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(remove(a1(), "all")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(remove(absent.id, "all")).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("Admin xóa buổi em học bù: lượt xếp bù bị bỏ, buổi vắng quay lại chưa xếp bù", async () => {
+    await assign(target.id);
+    await recordTarget("present");
+    expect((await history(a1())).lessons.map((l) => l.content)).toEqual(["Bài 5: Cảm biến"]);
+    expect(await remove(a1(), [target.id])).toMatchObject({ deletedAttendances: 1, deletedMakeups: 1 });
+    const after = await history(a1());
+    expect(after.lessons).toEqual([]);
+    expect(after.sessions).toEqual([expect.objectContaining({ date: "2026-01-06", makeup: "pending" })]);
+    // Điểm danh của hai học viên lớp B ở buổi đó giữ nguyên.
+    expect(await db.select().from(attendances).where(eq(attendances.sessionId, target.id))).toHaveLength(2);
+  });
+
+  it("Admin xóa một bài của chương trình học là xóa mọi buổi em đã học bài đó; xóa hết giữ lại buổi của lớp đã đóng", async () => {
+    const made = await taught(f.classA.id, f.teacherA.id, [
+      ["2026-01-07", "Robotics · Buổi 1 – Làm quen với robot"],
+      ["2026-01-08", "Robotics · Buổi 1 – Làm quen với robot"], // học lại Buổi 1
+      ["2026-01-09", "Robotics · Buổi 2 – Lắp ráp"],
+    ]);
+    const [inClassB] = await taught(f.classB.id, f.teacherB.id, [["2026-01-11", "Robotics · Buổi 4 – Cảm biến"]]);
+    await db.insert(attendances).values([...made, inClassB!].map((s) => ({ sessionId: s.id, studentId: a2(), status: "present" as const })));
+    const before = await history(a2());
+    const lessonOne = before.lessons.find((l) => l.lesson?.period === 1)!;
+    expect([...lessonOne.sessionIds].sort()).toEqual([made[0]!.id, made[1]!.id].sort());
+    expect(before.courses).toEqual([expect.objectContaining({ courseName: "Robotics", learned: 3 })]);
+
+    expect(await remove(a2(), lessonOne.sessionIds)).toMatchObject({ deletedAttendances: 2, warnings: [] });
+    let now = await history(a2());
+    expect(now.lessons.map((l) => l.content)).toEqual(["Robotics · Buổi 2 – Lắp ráp", "Robotics · Buổi 4 – Cảm biến", "Bài 3: Động cơ"]);
+    expect(now.courses).toEqual([expect.objectContaining({ courseName: "Robotics", learned: 2 })]);
+    expect(now.sessions).toHaveLength(3);
+
+    // Lớp B đã đóng (tổng kết đã chốt): buổi của lớp đó không xóa được; "xóa hết" bỏ qua và báo lại.
+    await db.update(classes).set({ status: "closed" }).where(eq(classes.id, f.classB.id));
+    await expect(remove(a2(), [inClassB!.id])).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await remove(a2(), "all")).toMatchObject({ deletedAttendances: 2, warnings: [expect.stringContaining("1 buổi")] });
+    now = await history(a2());
+    expect(now.sessions.map((s) => s.date)).toEqual(["2026-01-11"]);
+    expect(now.lessons.map((l) => l.content)).toEqual(["Robotics · Buổi 4 – Cảm biến"]);
+    // Học viên khác của buổi 06/01 không bị đụng tới.
+    expect((await history(a1())).sessions).toHaveLength(1);
   });
 
   it("danh sách học viên kèm tổng sao tích lũy", async () => {

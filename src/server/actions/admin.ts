@@ -23,6 +23,7 @@ import {
   sendCredentialsInput,
   roomInput,
   roomUpdate,
+  studentHistoryDelete,
   studentUpdate,
   teacherInput,
   teacherUpdate,
@@ -47,6 +48,7 @@ import * as timesheet from "../services/timesheet";
 import * as tuition from "../services/tuition";
 import * as classes from "../services/classes";
 import * as makeups from "../services/makeups";
+import * as history from "../services/student-history";
 import * as students from "../services/students";
 
 // Mỗi action chỉ là vỏ: phiên + Zod ở runAction, phân quyền nằm trong service.
@@ -125,6 +127,8 @@ export const enrollNewStudentAction = async (input: unknown) =>
   runAction(newEnrollmentInput, input, (a, d) => classes.enrollNewStudent(a, d), ADMIN);
 export const assignMakeupAction = async (input: unknown) => runAction(makeupAssignInput, input, (a, d) => makeups.assignMakeup(a, d), ADMIN);
 export const cancelMakeupAction = async (input: unknown) => runAction(idOnly, input, (a, d) => makeups.cancelMakeup(a, d.id), ADMIN);
+export const deleteStudentHistoryAction = async (input: unknown) =>
+  runAction(studentHistoryDelete, input, history.deleteStudentHistory, ADMIN);
 export const updateJoinDateAction = async (input: unknown) => runAction(joinDateInput, input, classes.updateJoinDate, ADMIN);
 export const leaveEnrollmentAction = async (input: unknown) => runAction(leaveInput, input, classes.leaveEnrollment, ADMIN);
 export const deleteEnrollmentAction = async (input: unknown) =>
