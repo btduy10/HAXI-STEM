@@ -33,6 +33,7 @@ export function CrudSection({
   createAction,
   updateAction,
   deleteAction,
+  deleteNote,
   addLabel = "Thêm",
   emptyText = "Chưa có dữ liệu.",
   detailLabel = "Chi tiết",
@@ -64,6 +65,8 @@ export function CrudSection({
   createAction?: ActionFn;
   updateAction?: ActionFn;
   deleteAction?: ActionFn;
+  /** Câu nói thêm trong hộp xác nhận xóa (vd. dữ liệu nào bị xóa theo). */
+  deleteNote?: string;
   addLabel?: string;
   emptyText?: string;
   detailLabel?: string;
@@ -72,7 +75,8 @@ export function CrudSection({
   const [pending, startTransition] = useTransition();
 
   function remove(row: CrudRow) {
-    if (!deleteAction || !window.confirm(`Xóa "${row.label ?? row.cells[0]}"? Thao tác này không hoàn tác được.`)) return;
+    const note = deleteNote ? `${deleteNote} ` : "";
+    if (!deleteAction || !window.confirm(`Xóa "${row.label ?? row.cells[0]}"? ${note}Thao tác này không hoàn tác được.`)) return;
     startTransition(async () => {
       const result = await deleteAction({ id: row.id });
       if (result.ok) toast.success("Đã xóa.");

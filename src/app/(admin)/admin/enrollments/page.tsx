@@ -4,13 +4,13 @@ import { ConfirmButton, FormDialogButton } from "@/components/action-buttons";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { BackLink } from "@/components/back-link";
 import { AssignMakeupButton, MakeupPlanner } from "@/components/makeup-planner";
-import { AddStudentButton, RosterEnroll } from "@/components/roster-enroll";
+import { AddStudentButton, RosterEnroll, RosterStudent } from "@/components/roster-enroll";
 import { Badge } from "@/components/ui/badge";
 import { MAKEUP_AHEAD_DAYS, MAKEUP_LOOKBACK_DAYS, MAKEUP_STATE_LABELS, canAssignMakeup } from "@/domain/makeup";
 import { ROSTER_ROWS, rosterTime } from "@/domain/roster";
 import { WEEKDAY_SHORT, isoWeekday } from "@/lib/dates";
 import { LABELS, formatDate, todayIso } from "@/lib/format";
-import { studentFields } from "@/lib/student-fields";
+import { newStudentFields } from "@/lib/student-fields";
 import {
   cancelMakeupAction,
   deleteEnrollmentAction,
@@ -19,10 +19,10 @@ import {
   leaveEnrollmentAction,
   placeStudentAction,
 } from "@/server/actions/admin";
-import { seesStudentPrivate } from "@/server/guard";
+import { seesAllClasses, seesStudentPrivate } from "@/server/guard";
 import { listClasses, listEnrollments, weeklyRoster } from "@/server/services/classes";
 import { activeClassIdsOf, listMakeupNeeds, listMakeupTargets } from "@/server/services/makeups";
-import { listStudents, listWaitingStudents, suggestStudentCode } from "@/server/services/students";
+import { listStudents, listWaitingStudents } from "@/server/services/students";
 import { requireMenu } from "@/server/session";
 
 export const metadata: Metadata = { title: "Ghi danh" };
@@ -37,61 +37,38 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
 
   // Chưa chọn lớp: tổng quan các lớp đang học theo buổi trong tuần. Đã chọn lớp: danh sách ghi danh chi tiết của lớp đó.
   // Ghi danh là nơi nhập học viên mới: chỉ cần quyền Thêm của menu này.
-  const canCreate = can("add");
-  const [enrollments, students, roster, waiting, needs, targets, suggestedCode] = await Promise.all([
+  const [enrollments, students, roster, waiting, needs, targets] = await Promise.all([
     current ? listEnrollments(actor, current.id) : [],
-    // Danh sách học viên có sẵn chỉ dùng ở trang chi tiết của một lớp (nút Ghi danh học viên).
-    current && can("add") ? listStudents(actor) : [],
+    // Học viên có sẵn để chọn khi ghi danh: thẻ "Thêm học viên" ở bảng lớp và nút Ghi danh học viên ở trang chi tiết.
+    can("add") ? listStudents(actor) : [],
     current ? null : weeklyRoster(actor),
     current ? [] : listWaitingStudents(actor),
     current ? [] : listMakeupNeeds(actor),
     current || !can("add") ? [] : listMakeupTargets(actor),
-    canCreate ? suggestStudentCode() : undefined,
   ]);
   const makeupClassIds = await activeClassIdsOf([...new Set(needs.map((n) => n.studentId))]);
-  // Form học viên mới: như form Học viên, bỏ ô Trạng thái (học viên mới luôn "Đang học").
-  const newStudentFields = canCreate
-    ? studentFields({ privateInfo: seesStudentPrivate(actor), suggestedCode }).filter((f) => f.name !== "status")
-    : undefined;
-  // Lớp đang mở còn chỗ, để chọn khi nhận học viên mới hoặc xếp lớp cho em đang chờ.
+  // Form học viên mới: không có ô mã (máy chủ tự cấp); thông tin cá nhân chỉ có khi người dùng được xem.
+  const studentForm = newStudentFields(seesStudentPrivate(actor));
+  // Nhập em chưa có lớp vào danh sách chờ: chỉ người thấy mọi lớp mới thấy danh sách này.
+  const canAddWaiting = can("add") && seesAllClasses(actor);
+  // Lớp đang mở còn chỗ, để chọn khi xếp lớp cho em đang chờ.
   const openClasses = classes
     .filter((c) => c.status === "open" && c.studentCount < c.maxSize)
     .map((c) => ({ value: c.id, label: `${c.code} – ${c.name} (còn ${c.maxSize - c.studentCount} chỗ)` }));
   const sessionLabel = (date: string, startTime: string) => `${WEEKDAY_SHORT[isoWeekday(date)]} ${formatDate(date)} · ${rosterTime(startTime)}`;
   const activeIds = new Set(enrollments.filter((e) => e.status === "active").map((e) => e.studentId));
-  const enrollable = students.filter((s) => s.status !== "left");
-  const candidates = enrollable.filter((s) => !activeIds.has(s.id));
+  // Chỉ mã và họ tên được gửi xuống trình duyệt.
+  const enrollable = students.filter((s) => s.status !== "left").map((s) => ({ value: s.id, label: `${s.code} – ${s.fullName}` }));
+  const candidates = enrollable.filter((s) => !activeIds.has(s.value));
+  // Học viên đang học của từng lớp: không cho chọn lại ở thẻ "Thêm học viên".
+  const activeByClass = Object.fromEntries((roster?.blocks ?? []).map((b) => [b.classId, b.students.map((s) => s.id)]));
   const today = todayIso();
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-2">
         {current && <BackLink href="/admin/enrollments">Tổng quan ghi danh</BackLink>}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-xl font-semibold sm:text-2xl">Ghi danh</h1>
-          {!current && newStudentFields && (
-            <FormDialogButton
-              label="Thêm học viên mới"
-              title="Thêm học viên mới"
-              description="Chọn lớp còn chỗ để ghi danh ngay, hoặc “Chưa xếp lớp” để đưa em vào danh sách chờ lớp."
-              fields={[
-                {
-                  name: "classId",
-                  label: "Lớp",
-                  type: "select",
-                  required: true,
-                  defaultValue: "none",
-                  options: [{ value: "none", label: "Chưa xếp lớp (vào danh sách chờ)" }, ...openClasses],
-                },
-                { name: "joinedAt", label: "Ngày vào lớp", type: "date", hint: "Bỏ qua nếu chưa xếp lớp." },
-                ...newStudentFields,
-              ]}
-              initial={{ joinedAt: today }}
-              action={enrollNewStudentAction}
-              successMessage="Đã thêm học viên."
-            />
-          )}
-        </div>
+        <h1 className="text-xl font-semibold sm:text-2xl">Ghi danh</h1>
       </div>
       <form>
         {/* Chọn lớp là hiện danh sách ngay. Màn hình rộng: ô chọn chỉ chiếm nửa chiều ngang. */}
@@ -124,7 +101,7 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
                     label: "Học viên",
                     type: "select",
                     required: true,
-                    options: candidates.map((s) => ({ value: s.id, label: `${s.code} – ${s.fullName}` })),
+                    options: candidates,
                   },
                   { name: "joinedAt", label: "Ngày vào lớp", type: "date", required: true },
                 ]}
@@ -188,10 +165,18 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
       )}
 
       {roster && (
-        <RosterEnroll today={today} newStudentFields={newStudentFields ?? []}>
+        <RosterEnroll
+          today={today}
+          students={enrollable}
+          activeByClass={activeByClass}
+          newStudentFields={studentForm}
+          canLeave={can("edit")}
+          canDelete={role === "admin"}
+        >
           <p className="text-sm text-muted-foreground">
-            Các lớp đang học theo buổi trong tuần (theo Thời khóa biểu tuần này). Bấm tên lớp để xem lịch sử ghi danh, cho rời lớp.
-            {can("add") && " Bấm một hàng “Thêm … học viên” để nhập học viên mới vào lớp; em đã có trong hệ thống thì xếp ở mục Chờ lớp hoặc ở danh sách chi tiết của lớp."}
+            Các lớp đang học theo buổi trong tuần (theo Thời khóa biểu tuần này). Bấm tên lớp để xem lịch sử ghi danh.
+            {can("add") && " Bấm một hàng “Thêm … học viên” để chọn học viên đã có hoặc nhập học viên mới vào lớp."}
+            {can("edit") && " Bấm tên học viên để cho rời lớp."}
           </p>
           {roster.blocks.length === 0 ? (
             <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Chưa có lớp đang mở nào có buổi học trong tuần hoặc lịch mẫu.</p>
@@ -244,7 +229,7 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
                               {student ? (
                                 <>
                                   <td className="truncate px-2" title={student.fullName}>
-                                    {student.fullName}
+                                    <RosterStudent enrollmentId={student.enrollmentId} studentName={student.fullName} classCode={block.classCode} />
                                   </td>
                                   <td className="px-1 text-center tabular-nums">{student.schoolGrade ?? ""}</td>
                                 </>
@@ -287,12 +272,29 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
         </RosterEnroll>
       )}
 
-      {!current && waiting.length > 0 && (
+      {!current && (waiting.length > 0 || canAddWaiting) && (
         <section className="grid gap-2" aria-labelledby="waiting-title">
-          <h2 id="waiting-title" className="text-lg font-semibold">
-            Chờ lớp <span className="text-sm font-normal text-muted-foreground">({waiting.length})</span>
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="waiting-title" className="text-lg font-semibold">
+              Chờ lớp <span className="text-sm font-normal text-muted-foreground">({waiting.length})</span>
+            </h2>
+            {canAddWaiting && (
+              <FormDialogButton
+                label="Thêm vào danh sách chờ"
+                variant="outline"
+                title="Thêm học viên chờ lớp"
+                description="Nhập học viên mới chưa xếp được lớp; mã học viên tự cấp. Khi có lớp, bấm Xếp lớp hoặc chọn em ở thẻ Thêm học viên của lớp."
+                fields={studentForm}
+                fixed={{ classId: "none" }}
+                action={enrollNewStudentAction}
+                successMessage="Đã thêm vào danh sách chờ."
+              />
+            )}
+          </div>
           <p className="text-sm text-muted-foreground">Học viên đang học nhưng chưa thuộc lớp đang mở nào.</p>
+          {waiting.length === 0 && (
+            <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Chưa có học viên chờ lớp.</p>
+          )}
           <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {waiting.map((s) => (
               <li key={s.id} data-waiting={s.code} className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border p-3 text-sm">

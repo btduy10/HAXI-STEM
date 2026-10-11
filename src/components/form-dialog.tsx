@@ -59,9 +59,11 @@ export function FormDialog({
   onOpenChange,
   title,
   description,
+  header,
   fields,
   initial,
   submitLabel = "Lưu",
+  submitVariant = "default",
   successMessage = "Đã lưu.",
   onSubmit,
 }: {
@@ -69,10 +71,14 @@ export function FormDialog({
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
+  /** Phần hiển thị giữa tiêu đề và form, vd. các thẻ chọn kiểu nhập. */
+  header?: React.ReactNode;
   fields: Field[];
   initial?: Record<string, string>;
   submitLabel?: string;
-  successMessage?: string;
+  submitVariant?: "default" | "destructive";
+  /** Thông báo khi lưu xong; dạng hàm thì nhận kết quả action trả về (vd. để báo mã vừa cấp). */
+  successMessage?: string | ((data: unknown) => string);
   onSubmit: (values: Record<string, string>) => ReturnType<ActionFn>;
 }) {
   const [pending, setPending] = useState(false);
@@ -104,7 +110,7 @@ export function FormDialog({
       if (firstInvalid) document.getElementById(`f-${firstInvalid.name}`)?.focus();
       return;
     }
-    toast.success(successMessage);
+    toast.success(typeof successMessage === "function" ? successMessage(result.data) : successMessage);
     showWarnings(result.data);
     onOpenChange(false);
   }
@@ -124,6 +130,7 @@ export function FormDialog({
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
+        {header}
         <form onSubmit={handleSubmit} className="grid gap-3" noValidate>
           {error && (
             <Alert variant="destructive">
@@ -202,7 +209,7 @@ export function FormDialog({
             <Button type="button" variant="outline" className="h-11 sm:h-9" onClick={() => handleOpenChange(false)}>
               Hủy
             </Button>
-            <Button type="submit" className="h-11 sm:h-9" disabled={pending}>
+            <Button type="submit" variant={submitVariant} className="h-11 sm:h-9" disabled={pending}>
               {pending ? "Đang lưu…" : submitLabel}
             </Button>
           </div>

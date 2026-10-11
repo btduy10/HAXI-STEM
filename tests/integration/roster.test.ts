@@ -56,7 +56,9 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     // Hai khung của Ca tối trong cùng Thứ Năm là một buổi, giờ từ khung sớm nhất tới khung muộn nhất.
     expect(thursday).toMatchObject({ classId: f.classA.id, startTime: "18:00:00", endTime: "21:00:00", teacherName: "Giáo viên A", maxSize: 3 });
     expect(thursday!.students.map((s) => s.fullName)).toEqual(["Học viên A1", "Học viên A2"]);
-    expect(thursday!.students[0]).toEqual({ id: f.students[0]!.id, fullName: "Học viên A1", schoolGrade: 5 });
+    // Kèm lượt ghi danh đang hiệu lực, để cho rời lớp hoặc xóa khỏi lớp ngay trên bảng.
+    const [enrollmentA1] = await db.select().from(enrollments).where(eq(enrollments.studentId, f.students[0]!.id));
+    expect(thursday!.students[0]).toEqual({ id: f.students[0]!.id, enrollmentId: enrollmentA1!.id, fullName: "Học viên A1", schoolGrade: 5 });
     // Lớp học 2 buổi/tuần: cùng danh sách học viên ở cả hai buổi.
     expect(saturday!.students).toEqual(thursday!.students);
   });

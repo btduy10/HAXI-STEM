@@ -62,7 +62,7 @@ export const deleteTeacherAction = async (input: unknown) =>
 export const updateStudentAction = async (input: unknown) =>
   runAction(studentUpdate, input, (a, d) => students.updateStudent(a, d.id, d.data), ADMIN);
 export const deleteStudentAction = async (input: unknown) =>
-  runAction(idOnly, input, (a, d) => students.deleteStudent(a, d.id), ADMIN);
+  runAction(idOnly, input, (a, d) => classes.deleteStudent(a, d.id), ADMIN);
 
 export const createCourseAction = async (input: unknown) => runAction(courseInput, input, catalog.createCourse, ADMIN);
 export const updateCourseAction = async (input: unknown) =>

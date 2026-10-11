@@ -115,7 +115,7 @@ describe("chức năng chỉ dành cho Admin", () => {
     // Giáo viên xem được học viên lớp mình (không có thông tin cá nhân); học viên lớp khác coi như không tồn tại.
     expect(await students.getStudent(f.actorA, f.students[0]!.id)).toMatchObject({ code: "A1", phone: null, guardianName: null });
     await expect(students.getStudent(f.actorA, f.students[2]!.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(students.deleteStudent(f.actorA, f.students[0]!.id)).rejects.toMatchObject(denied);
+    await expect(classes.deleteStudent(f.actorA, f.students[0]!.id)).rejects.toMatchObject(denied);
     await expect(classes.listEnrollments(f.actorA, f.classA.id)).rejects.toMatchObject(denied);
     await expect(
       classes.enrollStudent(f.actorA, { classId: f.classA.id, studentId: f.students[4]!.id, joinedAt: "2026-01-10" }),

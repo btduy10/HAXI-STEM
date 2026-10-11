@@ -113,6 +113,7 @@ export default async function StudentsPage({ searchParams }: PageProps<"/admin/s
         fields={formFields}
         updateAction={can("edit") ? updateStudentAction : undefined}
         deleteAction={admin ? deleteStudentAction : undefined}
+        deleteNote="Em phải rời hết các lớp trước. Các lượt ghi danh cũ, điểm danh và sao của em cũng bị xóa."
         detailLabel="Hồ sơ"
         emptyText={q ? "Không tìm thấy học viên phù hợp." : "Chưa có học viên."}
       />

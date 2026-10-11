@@ -220,7 +220,7 @@ describe("Giáo viên trực (mặc định: thấy mọi lớp, hỗ trợ đi�
     await expect(stars.awardStars(duty(), { sessionId: sessionA.id, criteriaId: criteria!, studentIds: [f.students[0]!.id], note: null }, now)).rejects.toMatchObject(denied);
     await expect(sessionSvc.cancelSession(duty(), { id: sessionA.id, note: null })).rejects.toMatchObject(denied);
     expect((await students.listStudentsPage(duty(), undefined, 1)).total).toBe(6);
-    await expect(students.deleteStudent(duty(), f.students[0]!.id)).rejects.toMatchObject(denied);
+    await expect(classes.deleteStudent(duty(), f.students[0]!.id)).rejects.toMatchObject(denied);
     await expect(attendance.unlockAttendance(duty(), sessionA.id, now)).rejects.toMatchObject(denied);
     await expect(sessionSvc.deleteSession(duty(), sessionA.id)).rejects.toMatchObject(denied);
     await expect(reports.updatePermissions(duty(), DEFAULT_PERMISSIONS)).rejects.toMatchObject(denied);
@@ -265,7 +265,7 @@ describe("quyền theo menu", () => {
     // Học viên lớp khác: không sửa được, kể cả khi gửi đúng id.
     await expect(students.updateStudent(viewer, f.students[2]!.id, input)).rejects.toMatchObject({ code: "NOT_FOUND" });
     // Xóa luôn chỉ Admin dù được tick hết.
-    await expect(students.deleteStudent(viewer, f.students[4]!.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(classes.deleteStudent(viewer, f.students[4]!.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("Giáo viên mặc định: xem học viên lớp mình để theo dõi, không có thông tin cá nhân, không sửa được", async () => {
@@ -289,7 +289,7 @@ describe("quyền theo menu", () => {
     const [stored] = await db.select().from(studentsTable).where(eq(studentsTable.id, f.students[0]!.id));
     expect(stored).toMatchObject({ birthDate: "2015-06-01", gender: "female", guardianName: "Mẹ A1", phone: "0911222333", note: "đã sửa" });
     // Vẫn không xóa được, và bỏ tick Sửa thì chỉ còn xem.
-    await expect(students.deleteStudent(duty, f.students[0]!.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(classes.deleteStudent(duty, f.students[0]!.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
     const viewOnly: Actor = { ...duty, perms: { ...DEFAULT_PERMISSIONS.duty_teacher!, menus: { ...DEFAULT_PERMISSIONS.duty_teacher!.menus, students: VIEW } } };
     await expect(students.updateStudent(viewOnly, f.students[0]!.id, input)).rejects.toMatchObject({ code: "FORBIDDEN" });
     // Tick thông tin cá nhân nhưng phạm vi lớp của mình: chỉ sửa được học viên lớp mình.

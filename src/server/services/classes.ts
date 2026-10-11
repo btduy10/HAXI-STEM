@@ -6,10 +6,12 @@ import {
   attendances,
   classTeachers,
   classes,
+  courseSummaries,
   courses,
   enrollments,
   rooms,
   scheduleTemplates,
+  sessionStudents,
   sessions,
   starLogs,
   students,
@@ -28,7 +30,7 @@ import { audit } from "../audit";
 import { AppError, notFound, translateDbError } from "../errors";
 import { type Actor, allowedClassIds, assertAdmin, assertCan, assertCanAny, assertClassAccess, assertNotTimetableOnly } from "../guard";
 import { createRow, deleteRow, updateRow } from "./crud";
-import { purgeStudentStarLogs } from "./stars";
+import { purgeAllStudentStarLogs, purgeStudentStarLogs } from "./stars";
 import { insertStudent } from "./students";
 
 const activeCount = sql<number>`(
@@ -252,7 +254,13 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
       .where(and(inArray(classTeachers.classId, ids), eq(classTeachers.role, "main")))
       .orderBy(asc(teachers.code)),
     db
-      .select({ classId: enrollments.classId, id: students.id, fullName: students.fullName, schoolGrade: students.schoolGrade })
+      .select({
+        classId: enrollments.classId,
+        enrollmentId: enrollments.id,
+        id: students.id,
+        fullName: students.fullName,
+        schoolGrade: students.schoolGrade,
+      })
       .from(enrollments)
       .innerJoin(students, eq(students.id, enrollments.studentId))
       .where(and(inArray(enrollments.classId, ids), eq(enrollments.status, "active")))
@@ -295,7 +303,11 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
     }
   }
 
-  const studentsOf = (classId: string) => active.filter((s) => s.classId === classId).map((s) => ({ id: s.id, fullName: s.fullName, schoolGrade: s.schoolGrade }));
+  // `enrollmentId`: lượt ghi danh đang hiệu lực của em ở lớp, để cho rời lớp hoặc xóa khỏi lớp ngay trên bảng.
+  const studentsOf = (classId: string) =>
+    active
+      .filter((s) => s.classId === classId)
+      .map((s) => ({ id: s.id, enrollmentId: s.enrollmentId, fullName: s.fullName, schoolGrade: s.schoolGrade }));
   const classOf = new Map(open.map((c) => [c.id, c]));
   const placed = [...merged.entries()]
     .map(([key, slot]) => {
@@ -492,4 +504,75 @@ export async function deleteEnrollment(actor: Actor, id: string) {
     });
     return { deletedAttendances: removed.length, deletedStarLogs };
   });
+}
+
+/**
+ * Xóa hẳn một học viên (chỉ Admin). Thứ tự bắt buộc: em phải rời hết các lớp trước (cho rời lớp hoặc xóa khỏi lớp ở Ghi danh);
+ * khi đó xóa em cùng các lượt ghi danh cũ, điểm danh và lịch sử sao. Không xóa được khi em có dữ liệu ở lớp đã đóng
+ * (tổng kết đã chốt theo số liệu đó) hoặc đã có phiếu thu học phí.
+ */
+export async function deleteStudent(actor: Actor, id: string) {
+  assertAdmin(actor);
+  try {
+    return await db.transaction(async (tx) => {
+      const [student] = await tx.select().from(students).where(eq(students.id, id)).for("update").limit(1);
+      if (!student) throw notFound("học viên");
+      const enrolled = await tx
+        .select({ id: enrollments.id, status: enrollments.status, classCode: classes.code, classStatus: classes.status })
+        .from(enrollments)
+        .innerJoin(classes, eq(classes.id, enrollments.classId))
+        .where(eq(enrollments.studentId, id))
+        .orderBy(asc(classes.code));
+
+      // Lớp đã đóng: ghi danh, tổng kết, hoặc điểm danh/sao (kể cả buổi học ghép) ở lớp đó.
+      const [summary] = await tx.select({ id: courseSummaries.id }).from(courseSummaries).where(eq(courseSummaries.studentId, id)).limit(1);
+      const [closedAttendance] = await tx
+        .select({ id: attendances.id })
+        .from(attendances)
+        .innerJoin(sessions, eq(sessions.id, attendances.sessionId))
+        .innerJoin(classes, eq(classes.id, sessions.classId))
+        .where(and(eq(attendances.studentId, id), eq(classes.status, "closed")))
+        .limit(1);
+      const [closedStars] = await tx
+        .select({ id: starLogs.id })
+        .from(starLogs)
+        .innerJoin(sessions, eq(sessions.id, starLogs.sessionId))
+        .innerJoin(classes, eq(classes.id, sessions.classId))
+        .where(and(eq(starLogs.studentId, id), eq(classes.status, "closed")))
+        .limit(1);
+      if (summary || closedAttendance || closedStars || enrolled.some((e) => e.classStatus === "closed")) {
+        throw new AppError("CONFLICT", "Học viên có dữ liệu ở lớp đã đóng (đã chốt tổng kết) nên không xóa được. Hãy đổi trạng thái thành “Đã nghỉ”.");
+      }
+
+      const active = enrolled.filter((e) => e.status === "active");
+      if (active.length > 0) {
+        throw new AppError(
+          "CONFLICT",
+          `Học viên đang học lớp ${active.map((e) => e.classCode).join(", ")}. Hãy cho rời lớp hoặc xóa khỏi lớp ở Ghi danh trước khi xóa học viên.`,
+        );
+      }
+
+      const enrollmentIds = enrolled.map((e) => e.id);
+      if (enrollmentIds.length > 0) {
+        const [receipt] = await tx
+          .select({ id: tuitionReceipts.id })
+          .from(tuitionReceipts)
+          .where(inArray(tuitionReceipts.enrollmentId, enrollmentIds))
+          .limit(1);
+        if (receipt) throw new AppError("CONFLICT", "Học viên đã có phiếu thu học phí nên không xóa được. Hãy đổi trạng thái thành “Đã nghỉ”.");
+      }
+
+      const removed = await tx.delete(attendances).where(eq(attendances.studentId, id)).returning({ id: attendances.id });
+      const deletedStarLogs = await purgeAllStudentStarLogs(tx, actor, id);
+      await tx.delete(sessionStudents).where(eq(sessionStudents.studentId, id));
+      await tx.delete(enrollments).where(eq(enrollments.studentId, id));
+      // Lượt xếp học bù và lượt đổi quà của em tự xóa theo (ON DELETE CASCADE).
+      await tx.delete(students).where(eq(students.id, id));
+      const counts = { deletedEnrollments: enrollmentIds.length, deletedAttendances: removed.length, deletedStarLogs };
+      await audit(tx, { userId: actor.userId, action: "delete", tableName: "students", recordId: id, oldValue: student, newValue: counts });
+      return counts;
+    });
+  } catch (e) {
+    throw translateDbError(e);
+  }
 }

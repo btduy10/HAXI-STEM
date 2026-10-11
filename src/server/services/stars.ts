@@ -75,6 +75,13 @@ export async function purgeStudentStarLogs(tx: Tx, actor: Actor, studentId: stri
   return purgeLogs(tx, actor, studentId, targets.map((t) => t.id));
 }
 
+/** Dùng khi Admin xóa hẳn một học viên: xóa toàn bộ lịch sử sao của em (gọi trong transaction đó). Trả về số dòng đã xóa. */
+export async function purgeAllStudentStarLogs(tx: Tx, actor: Actor, studentId: string): Promise<number> {
+  assertAdmin(actor);
+  const targets = await tx.select({ id: starLogs.id }).from(starLogs).where(eq(starLogs.studentId, studentId));
+  return purgeLogs(tx, actor, studentId, targets.map((t) => t.id));
+}
+
 /** Dùng khi Admin xóa hẳn một buổi học: xóa mọi lần ghi sao của buổi. Trả về số dòng đã xóa. */
 export async function purgeSessionStarLogs(tx: Tx, actor: Actor, sessionId: string): Promise<number> {
   assertAdmin(actor);

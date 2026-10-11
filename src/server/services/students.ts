@@ -4,11 +4,11 @@ import { db, type DbOrTx, type Tx } from "@/db";
 import { classes, enrollments, students } from "@/db/schema";
 import { nextStudentCode, studentCodeYearPrefix } from "@/domain/student-code";
 import { todayIso } from "@/lib/format";
-import type { studentCreateInput, studentInput } from "@/lib/validation/entities";
+import type { studentInput } from "@/lib/validation/entities";
 import { audit } from "../audit";
 import { notFound } from "../errors";
 import { type Actor, allowedClassIds, assertCan, assertClassAccess, isAdmin, seesAllClasses, seesStudentPrivate } from "../guard";
-import { deleteRow, updateRow } from "./crud";
+import { updateRow } from "./crud";
 
 type StudentRow = typeof students.$inferSelect;
 
@@ -67,7 +67,7 @@ export async function getStudent(actor: Actor, id: string) {
   return forActor(actor, [row])[0]!;
 }
 
-/** Mã học viên tự cấp kế tiếp của năm hiện tại (HX2601, HX2602, …), để điền sẵn vào form thêm mới. */
+/** Mã học viên tự cấp kế tiếp của năm hiện tại (HX2601, HX2602, …). */
 export async function suggestStudentCode(tx: DbOrTx = db, now: Date = new Date()): Promise<string> {
   const year = Number(todayIso(now).slice(0, 4));
   const rows = await tx.select({ code: students.code }).from(students).where(like(students.code, `${studentCodeYearPrefix(year)}%`));
@@ -76,16 +76,18 @@ export async function suggestStudentCode(tx: DbOrTx = db, now: Date = new Date()
 
 /**
  * Thêm học viên trong một giao dịch có sẵn (người gọi đã kiểm tra quyền Thêm của menu Ghi danh).
- * Để trống mã thì tự cấp mã kế tiếp; không được xem thông tin cá nhân thì các ô đó không được ghi qua form.
+ * Mã luôn do máy chủ cấp (mã kế tiếp của năm); không được xem thông tin cá nhân thì các ô đó không được ghi qua form.
  */
-export async function insertStudent(tx: Tx, actor: Actor, data: z.output<typeof studentCreateInput>, now: Date = new Date()): Promise<StudentRow> {
+export async function insertStudent(
+  tx: Tx,
+  actor: Actor,
+  data: Omit<z.output<typeof studentInput>, "code">,
+  now: Date = new Date(),
+): Promise<StudentRow> {
   const values = seesStudentPrivate(actor) ? data : { ...data, birthDate: null, gender: null, guardianName: null, phone: null, note: null };
-  let code = values.code;
-  if (!code) {
-    // Hai người thêm cùng lúc không nhận trùng một mã tự cấp.
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('student_code'))`);
-    code = await suggestStudentCode(tx, now);
-  }
+  // Hai người thêm cùng lúc không nhận trùng một mã tự cấp.
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext('student_code'))`);
+  const code = await suggestStudentCode(tx, now);
   const [row] = await tx.insert(students).values({ ...values, code }).returning();
   await audit(tx, { userId: actor.userId, action: "create", tableName: "students", recordId: row!.id, newValue: row });
   return row!;
@@ -128,7 +130,6 @@ export async function updateStudent(actor: Actor, id: string, data: z.output<typ
   return hidePrivate(await updateRow(actor, students, "students", id, patch, "students"));
 }
 
-export const deleteStudent = (actor: Actor, id: string) => deleteRow(actor, students, "students", id);
 /**
  * Học viên đang ghi danh của một lớp. GV chỉ xem được lớp mình và chỉ nhận
  * các trường tối thiểu (không có số điện thoại, phụ huynh, ghi chú).

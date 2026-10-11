@@ -49,25 +49,13 @@ export const studentInput = z.object({
   note: optText(500),
 });
 
-/** Thêm học viên: để trống mã thì máy chủ tự cấp mã kế tiếp (HX + năm + số thứ tự). */
-export const studentCreateInput = studentInput.extend({
-  code: z
-    .string()
-    .nullish()
-    .transform((value, ctx) => {
-      if (!value?.trim()) return null;
-      const parsed = code.safeParse(value);
-      if (parsed.success) return parsed.data;
-      ctx.addIssue({ code: "custom", message: parsed.error.issues[0]?.message ?? "Mã không hợp lệ" });
-      return z.NEVER;
-    }),
-});
-
 /**
- * Học viên mới nhập ở trang Ghi danh: thông tin học viên kèm lớp muốn vào.
+ * Học viên mới nhập ở trang Ghi danh: thông tin học viên kèm lớp muốn vào. Form không có ô mã: máy chủ luôn tự cấp
+ * mã kế tiếp (HX + năm + số thứ tự), mã gửi kèm bị bỏ qua.
  * `classId` trống hoặc "none" = chưa xếp lớp (em vào danh sách chờ lớp).
  */
-export const newEnrollmentInput = studentCreateInput
+export const newEnrollmentInput = studentInput
+  .omit({ code: true })
   .extend({
     classId: z
       .union([id, z.literal(""), z.literal("none")])

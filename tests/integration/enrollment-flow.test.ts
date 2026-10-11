@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attendances, classes, enrollments, makeupAssignments, sessions, starCriteria, students } from "@/db/schema";
+import { attendances, auditLogs, classes, enrollments, makeupAssignments, sessions, starCriteria, starLogs, students, tuitionReceipts } from "@/db/schema";
 import { DEFAULT_PERMISSIONS, type RolePermissions } from "@/lib/permissions";
 import { newEnrollmentInput } from "@/lib/validation/entities";
 import type { Actor } from "@/server/guard";
@@ -90,15 +90,17 @@ beforeEach(async () => {
 });
 
 describe("mã học viên tự cấp", () => {
-  it("để trống mã thì cấp mã kế tiếp của năm; mã nhập tay được giữ; mã gợi ý trên form là mã kế tiếp", async () => {
+  it("mã luôn do máy chủ cấp: mã kế tiếp của năm, mã gửi kèm từ form bị bỏ qua", async () => {
     const create = (values: Record<string, unknown>) => classSvc.enrollNewStudent(f.admin, newStudent({ classId: "none", ...values }), NOW);
-    expect((await create({ code: "", fullName: "Em Một" })).code).toBe("HX2601");
-    expect((await create({ fullName: "Em Hai" })).code).toBe("HX2602");
-    expect((await create({ code: "HX2610", fullName: "Em Mười" })).code).toBe("HX2610");
+    expect((await create({ fullName: "Em Một" })).code).toBe("HX2601");
+    expect((await create({ code: "", fullName: "Em Hai" })).code).toBe("HX2602");
+    // Gửi kèm mã (kể cả mã đang có) vẫn nhận mã kế tiếp, không trùng.
+    expect((await create({ code: "HX2610", fullName: "Em Ba" })).code).toBe("HX2603");
+    expect((await create({ code: "HX2601", fullName: "Em Bốn" })).code).toBe("HX2604");
+    // Mã sửa tay ở QL Học viên vẫn được tính khi cấp mã kế tiếp; sang năm sau đếm lại từ đầu.
+    await db.update(students).set({ code: "HX2610" }).where(eq(students.code, "HX2604"));
     expect(await studentSvc.suggestStudentCode(db, NOW)).toBe("HX2611");
-    // Sang năm sau đếm lại từ đầu; mã trùng vẫn bị từ chối.
     expect(await studentSvc.suggestStudentCode(db, new Date("2027-01-02T05:00:00Z"))).toBe("HX2701");
-    await expect(create({ code: "HX2601", fullName: "Trùng mã" })).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("hai người thêm cùng lúc không nhận trùng mã tự cấp", async () => {
@@ -159,6 +161,66 @@ describe("ghi danh học viên mới", () => {
     const second = await classSvc.enrollNewStudent(trusted, newStudent({ classId: "none", phone: "0901234567", guardianName: "Phụ huynh" }), NOW);
     const [kept] = await db.select().from(students).where(eq(students.id, second.studentId));
     expect(kept).toMatchObject({ phone: "0901234567", guardianName: "Phụ huynh" });
+  });
+});
+
+describe("xóa học viên theo thứ tự: rời lớp trước rồi mới xóa", () => {
+  const enrollmentOf = async (studentId: string) => (await db.select().from(enrollments).where(eq(enrollments.studentId, studentId)))[0]!;
+  const exists = async (studentId: string) => (await db.select().from(students).where(eq(students.id, studentId))).length === 1;
+
+  it("còn đang học thì bị chặn, thông báo nêu tên lớp; rời lớp rồi xóa được cùng ghi danh cũ, điểm danh, sao, lượt xếp bù", async () => {
+    await starSvc.awardStars(f.admin, { sessionId: absent.id, criteriaId: plusThree, studentIds: [a1()], note: null }, NOW);
+    await assign(target.id);
+    await expect(classSvc.deleteStudent(f.admin, a1())).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Học viên đang học lớp A. Hãy cho rời lớp hoặc xóa khỏi lớp ở Ghi danh trước khi xóa học viên.",
+    });
+    expect(await exists(a1())).toBe(true);
+
+    await classSvc.leaveEnrollment(f.admin, { id: (await enrollmentOf(a1())).id, leftAt: TODAY });
+    expect(await classSvc.deleteStudent(f.admin, a1())).toEqual({ deletedEnrollments: 1, deletedAttendances: 1, deletedStarLogs: 1 });
+    expect(await exists(a1())).toBe(false);
+    expect(await db.select().from(enrollments).where(eq(enrollments.studentId, a1()))).toHaveLength(0);
+    expect(await db.select().from(attendances).where(eq(attendances.studentId, a1()))).toHaveLength(0);
+    expect(await db.select().from(starLogs).where(eq(starLogs.studentId, a1()))).toHaveLength(0);
+    expect(await db.select().from(makeupAssignments).where(eq(makeupAssignments.studentId, a1()))).toHaveLength(0);
+    // Dữ liệu của em khác không bị đụng tới; có ghi nhật ký.
+    expect(await db.select().from(attendances).where(eq(attendances.studentId, a2()))).toHaveLength(1);
+    const logs = await db.select().from(auditLogs).where(and(eq(auditLogs.tableName, "students"), eq(auditLogs.action, "delete")));
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ recordId: a1(), newValue: { deletedEnrollments: 1, deletedAttendances: 1, deletedStarLogs: 1 } });
+    await expect(classSvc.deleteStudent(f.admin, a1())).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("xóa khỏi lớp (ghi danh nhập sai) cũng tính là đã rời lớp; em chưa thuộc lớp nào thì xóa được ngay", async () => {
+    await classSvc.deleteEnrollment(f.admin, (await enrollmentOf(a2())).id);
+    expect(await classSvc.deleteStudent(f.admin, a2())).toEqual({ deletedEnrollments: 0, deletedAttendances: 0, deletedStarLogs: 0 });
+    expect(await classSvc.deleteStudent(f.admin, f.students[4]!.id)).toMatchObject({ deletedEnrollments: 0 });
+    expect(await exists(f.students[4]!.id)).toBe(false);
+  });
+
+  it("đã có phiếu thu học phí hoặc có dữ liệu ở lớp đã đóng thì không xóa được, kể cả khi đã rời lớp", async () => {
+    const paid = await enrollmentOf(a1());
+    await db.insert(tuitionReceipts).values({ enrollmentId: paid.id, amount: 500_000, method: "cash", paidAt: TODAY });
+    await classSvc.leaveEnrollment(f.admin, { id: paid.id, leftAt: TODAY });
+    await expect(classSvc.deleteStudent(f.admin, a1())).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "Học viên đã có phiếu thu học phí nên không xóa được. Hãy đổi trạng thái thành “Đã nghỉ”.",
+    });
+
+    const b1 = f.students[2]!.id;
+    await classSvc.leaveEnrollment(f.admin, { id: (await enrollmentOf(b1)).id, leftAt: TODAY });
+    await db.update(classes).set({ status: "closed" }).where(eq(classes.id, f.classB.id));
+    await expect(classSvc.deleteStudent(f.admin, b1)).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("lớp đã đóng") });
+    expect(await exists(a1())).toBe(true);
+    expect(await exists(b1)).toBe(true);
+    expect(await db.select().from(attendances).where(eq(attendances.studentId, a1()))).toHaveLength(1);
+  });
+
+  it("chỉ Admin xóa được, dù vai trò được tick hết các quyền", async () => {
+    const clerk = withMenus(f.actorA, { students: ALL, enrollments: ALL });
+    await expect(classSvc.deleteStudent(clerk, f.students[4]!.id)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await exists(f.students[4]!.id)).toBe(true);
   });
 });
 

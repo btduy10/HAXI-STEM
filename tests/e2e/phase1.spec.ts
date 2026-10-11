@@ -148,33 +148,36 @@ test("Admin: đổi mật khẩu → bắt buộc thiết lập 2FA → quản l
   await expectNotFound(page, "/admin/students/import");
   expect((await page.request.get("/api/import/students")).status()).toBe(404);
 
-  // Học viên mới nhập ở Ghi danh: lỗi xác thực hiển thị theo trường, sau đó lưu thành công (chưa xếp lớp → Chờ lớp).
+  // Học viên chưa có lớp nhập ở mục Chờ lớp của Ghi danh (không còn nút "Thêm học viên mới" đầu trang); form không có ô Mã HV.
+  // Lỗi xác thực hiển thị theo trường, sau đó lưu thành công và em nằm trong danh sách chờ với mã tự cấp.
   await page.goto("/admin/enrollments");
-  await page.getByRole("button", { name: "Thêm học viên mới" }).click();
-  await page.getByLabel("Mã HV").fill("HV 999");
+  await expect(page.getByRole("button", { name: "Thêm học viên mới" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Thêm vào danh sách chờ" }).click();
+  await expect(page.getByLabel("Mã HV")).toHaveCount(0);
+  await page.locator("#f-schoolGrade").fill("13");
+  await page.getByRole("button", { name: "Lưu" }).click();
+  await expect(page.getByText("Bắt buộc nhập")).toBeVisible();
+  await page.screenshot({ path: "test-results/shots/student-form-error-360.png" });
+  await page.locator("#f-schoolGrade").fill("");
   await page.getByLabel("Họ tên").fill("Trần Thử Nghiệm <script>alert(1)</script>");
   await page.getByRole("button", { name: "Lưu" }).click();
-  await expect(page.getByText("Chỉ gồm chữ không dấu, số, gạch nối")).toBeVisible();
-  await page.screenshot({ path: "test-results/shots/student-form-error-360.png" });
-  await page.getByLabel("Mã HV").fill("HV999");
-  await page.getByRole("button", { name: "Lưu" }).click();
-  await expect(page.getByText("Đã thêm học viên.")).toBeVisible();
-  // Nội dung người dùng nhập hiển thị dạng văn bản, không chạy như HTML: ở mục Chờ lớp và ở QL Học viên (HV999 xếp cuối nên nằm ở trang 2).
-  await expect(page.locator('[data-waiting="HV999"]')).toContainText("Trần Thử Nghiệm <script>alert(1)</script>");
-  await page.goto("/admin/students?page=2");
+  await expect(page.getByText("Đã thêm vào danh sách chờ.")).toBeVisible();
+  // Nội dung người dùng nhập hiển thị dạng văn bản, không chạy như HTML: ở mục Chờ lớp và ở QL Học viên.
+  const waitingRow = page.locator("[data-waiting]").filter({ hasText: "Trần Thử Nghiệm <script>alert(1)</script>" });
+  await expect(waitingRow).toHaveAttribute("data-waiting", /^HX\d{4,}$/);
+  await page.goto(`/admin/students?q=${encodeURIComponent("Trần Thử Nghiệm")}`);
   await expect(visibleText(page, "Trần Thử Nghiệm <script>alert(1)</script>")).toBeVisible();
   await expectNoHorizontalScroll(page);
 
   // Thêm một học viên nữa kèm thông tin cá nhân, chưa xếp lớp.
   await page.goto("/admin/enrollments");
-  await page.getByRole("button", { name: "Thêm học viên mới" }).click();
-  await page.getByLabel("Mã HV").fill("HV800");
+  await page.getByRole("button", { name: "Thêm vào danh sách chờ" }).click();
   await page.getByLabel("Họ tên").fill("Đinh Nhập Excel");
   await page.locator("#f-schoolGrade").fill("4");
   await page.locator("#f-phone").fill("0903334445");
   await page.getByRole("button", { name: "Lưu" }).click();
-  await expect(page.getByText("Đã thêm học viên.")).toBeVisible();
-  await page.goto("/admin/students?q=HV800");
+  await expect(page.getByText("Đã thêm vào danh sách chờ.")).toBeVisible();
+  await page.goto(`/admin/students?q=${encodeURIComponent("Đinh Nhập Excel")}`);
   await expect(visibleText(page, "Đinh Nhập Excel")).toBeVisible();
   await expect(visibleText(page, "0903334445")).toBeVisible();
 
@@ -199,7 +202,8 @@ test("Admin: đổi mật khẩu → bắt buộc thiết lập 2FA → quản l
   await page.getByLabel("Lớp học").selectOption({ label: "RB-NC01 – Robotics Nâng cao 01 (7/8)" });
   await expect(page).toHaveURL(/\/admin\/enrollments\?classId=/);
   await page.getByRole("button", { name: "Ghi danh học viên" }).click();
-  await page.getByLabel("Học viên").selectOption({ label: "HV800 – Đinh Nhập Excel" });
+  const newcomer = await page.locator("#f-studentId option").filter({ hasText: "Đinh Nhập Excel" }).getAttribute("value");
+  await page.getByLabel("Học viên").selectOption(newcomer!);
   await page.getByRole("button", { name: "Lưu" }).click();
   await expect(page.getByText("Đã ghi danh.")).toBeVisible();
   await expect(page.getByText("Đinh Nhập Excel")).toBeVisible();

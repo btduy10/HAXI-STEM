@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canAssignMakeup, isAbsence, makeupState } from "@/domain/makeup";
 import { nextStudentCode } from "@/domain/student-code";
-import { newEnrollmentInput, studentCreateInput } from "@/lib/validation/entities";
+import { newEnrollmentInput } from "@/lib/validation/entities";
 
 describe("mã học viên tự cấp", () => {
   it("HX + 2 số cuối của năm + số thứ tự, bắt đầu từ 01", () => {
@@ -22,17 +22,15 @@ describe("mã học viên tự cấp", () => {
     expect(nextStudentCode(["HV001", "HX26A1", "HX265", "hx2604 ", "HX2603-B"], 2026)).toBe("HX2605");
   });
 
-  it("form thêm học viên: để trống mã thì máy chủ tự cấp; mã nhập tay vẫn được kiểm tra như cũ", () => {
-    expect(studentCreateInput.parse({ code: "", fullName: "An", schoolGrade: "" }).code).toBeNull();
-    expect(studentCreateInput.parse({ code: "  ", fullName: "An", schoolGrade: "" }).code).toBeNull();
-    expect(studentCreateInput.parse({ fullName: "An", schoolGrade: "" }).code).toBeNull();
-    expect(studentCreateInput.parse({ code: " hx2601 ", fullName: "An", schoolGrade: "" }).code).toBe("HX2601");
-    expect(studentCreateInput.safeParse({ code: "HX 26", fullName: "An", schoolGrade: "" }).success).toBe(false);
+  it("form học viên mới không có ô mã: mã gửi kèm (kể cả mã sai mẫu) bị bỏ qua, máy chủ tự cấp", () => {
+    expect(newEnrollmentInput.parse({ fullName: "An", schoolGrade: "", classId: "none" })).not.toHaveProperty("code");
+    expect(newEnrollmentInput.parse({ code: "HX2699", fullName: "An", schoolGrade: "", classId: "none" })).not.toHaveProperty("code");
+    expect(newEnrollmentInput.safeParse({ code: "HX 26", fullName: "An", schoolGrade: "", classId: "none" }).success).toBe(true);
   });
 
   it("học viên mới ở Ghi danh: không chọn lớp thì vào danh sách chờ; có lớp thì phải có ngày vào lớp", () => {
     const classId = "0b8a3f0e-7d0c-4c5e-9a53-0c1d2e3f4a5b";
-    expect(newEnrollmentInput.parse({ fullName: "An", schoolGrade: "", classId: "none", joinedAt: "2026-01-13" })).toMatchObject({ classId: null, code: null });
+    expect(newEnrollmentInput.parse({ fullName: "An", schoolGrade: "", classId: "none", joinedAt: "2026-01-13" })).toMatchObject({ classId: null });
     expect(newEnrollmentInput.parse({ fullName: "An", schoolGrade: "", classId: "" }).classId).toBeNull();
     expect(newEnrollmentInput.parse({ fullName: "An", schoolGrade: "", classId, joinedAt: "2026-01-13" })).toMatchObject({ classId, joinedAt: "2026-01-13", status: "active" });
     expect(newEnrollmentInput.safeParse({ fullName: "An", schoolGrade: "", classId, joinedAt: "" }).success).toBe(false);
