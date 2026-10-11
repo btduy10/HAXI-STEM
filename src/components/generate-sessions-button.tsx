@@ -10,7 +10,6 @@ type Result = {
   created: number;
   alreadyExisting: number;
   warnings: string[];
-  courseSessions?: number;
   scheduled?: number;
   removed?: number;
 };
@@ -28,7 +27,7 @@ export function GenerateSessionsButton({
   function run() {
     if (
       !window.confirm(
-        "Xếp lại lịch của lớp theo lịch mẫu? Các buổi chưa dạy (kể cả buổi xếp tay, buổi đã sửa riêng) được xếp lại đúng thứ, ca, giáo viên của lịch mẫu cho đủ số buổi khóa học. Buổi đã điểm danh, đã ghi sao và buổi đã hủy giữ nguyên.",
+        "Xếp lại lịch của lớp theo lịch mẫu? Các buổi chưa dạy (kể cả buổi xếp tay, buổi đã sửa riêng) được xếp lại đúng thứ, ca, giáo viên của lịch mẫu cho cả thời gian của lớp (từ ngày bắt đầu đến ngày kết thúc). Buổi đã điểm danh, đã ghi sao và buổi đã hủy giữ nguyên.",
       )
     )
       return;
@@ -49,9 +48,9 @@ export function GenerateSessionsButton({
         <Alert>
           <AlertTitle>Đã tạo mới {result.created} buổi theo lịch.</AlertTitle>
           <AlertDescription>
-            {result.courseSessions !== undefined && result.scheduled !== undefined && (
+            {result.scheduled !== undefined && (
               <p>
-                Lớp có {result.scheduled}/{result.courseSessions} buổi theo khóa học
+                Lớp có {result.scheduled} buổi
                 {result.scheduled > result.created && ` (giữ ${result.scheduled - result.created} buổi đã dạy)`}. Xem các buổi ở menu Thời
                 khóa biểu.
               </p>

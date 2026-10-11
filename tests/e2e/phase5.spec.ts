@@ -156,9 +156,10 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   // Tạo lớp ở trang Lớp học với lựa chọn Hiển thị = Chỉ trên Thời khóa biểu.
   await page.goto("/admin/classes");
   await page.getByRole("button", { name: "Thêm", exact: true }).click();
-  await page.locator("#f-code").fill("MP-E2E");
+  // Form không còn ô Mã lớp (máy chủ tự cấp) và ô Khóa học (lớp không gắn với khóa).
+  await expect(page.locator("#f-code")).toHaveCount(0);
+  await expect(page.locator("#f-courseId")).toHaveCount(0);
   await page.locator("#f-name").fill("Mượn phòng E2E");
-  await page.locator("#f-courseId").selectOption({ index: 1 });
   await page.locator("#f-defaultRoomId").selectOption({ label: `${room!.name} (${room!.capacity} chỗ)` });
   await page.locator("#f-startDate").fill(shift(day, -7));
   await page.locator("#f-endDate").fill(shift(day, 30));
@@ -167,10 +168,23 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   await page.locator("#f-timetableOnly").selectOption({ label: "Chỉ trên Thời khóa biểu" });
   await page.getByRole("button", { name: "Lưu" }).click();
   await expect(page.getByText("Đã lưu.")).toBeVisible();
-  await expect(page.locator("li:visible").filter({ hasText: "MP-E2E" })).toContainText("Chỉ Thời khóa biểu");
-  await expectNoHorizontalScroll(page);
-  const [cls] = await db`select id, timetable_only from classes where code = 'MP-E2E'`;
+  const [cls] = await db`select id, code, course_id, timetable_only from classes where name = 'Mượn phòng E2E'`;
   expect(cls!.timetable_only).toBe(true);
+  expect(cls!.course_id).toBeNull();
+  // Mã lớp tự cấp: RB + năm + số thứ tự. Cột Lớp ở trang Lớp học chỉ hiện tên lớp, không hiện mã và không có cột Khóa học.
+  const lendCode = cls!.code as string;
+  expect(lendCode).toMatch(new RegExp(`^RB${day.slice(2, 4)}\\d{2,}$`));
+  const lendCard = page.locator("li:visible").filter({ hasText: "Mượn phòng E2E" });
+  await expect(lendCard).toContainText("Chỉ Thời khóa biểu");
+  await expect(lendCard).not.toContainText(lendCode);
+  await expect(page.locator("li:visible").filter({ hasText: "Robotics Cơ bản 01" })).not.toContainText("RB-CB01");
+  await expect(page.getByText("Khóa học:")).toHaveCount(0);
+  // Sửa lớp cũng không có ô Mã lớp.
+  await page.getByRole("button", { name: "Sửa Mượn phòng E2E" }).click();
+  await expect(page.locator("#f-name")).toHaveValue("Mượn phòng E2E");
+  await expect(page.locator("#f-code")).toHaveCount(0);
+  await page.getByRole("button", { name: "Hủy" }).click();
+  await expectNoHorizontalScroll(page);
   const lendId = cls!.id as string;
 
   // Trang chi tiết rút gọn: không có Sĩ số, phần Học viên, nút Quản lý ghi danh. Thêm lịch mẫu thứ hôm nay → buổi tự có.
@@ -188,7 +202,7 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   // Xếp lại toàn bộ theo lịch mẫu để có cả buổi của tuần trước (đã qua ngày, không ai điểm danh).
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Sinh buổi học từ lịch mẫu" }).click();
-  await expect(page.getByText(/Lớp có \d+\/\d+ buổi theo khóa học/)).toBeVisible();
+  await expect(page.getByText(/Lớp có \d+ buổi/)).toBeVisible();
   await expect(page.getByText(/buổi chưa có giáo viên/)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   const held = await db`select id, date::text as date from sessions where class_id = ${lendId} order by date`;
@@ -201,7 +215,7 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   for (const date of [day, shift(day, -7)]) {
     await page.goto(`/admin/timetable?view=week&date=${date}&classId=${lendId}`);
     const tile = page.locator("[data-timetable-only]:visible").first();
-    await expect(tile).toContainText("MP-E2E");
+    await expect(tile).toContainText(lendCode);
     await expect(tile).toContainText("Chỉ xem lịch");
     await expect(tile.getByText("Quá hạn")).toHaveCount(0);
     expect(await tile.evaluate((el) => (el as HTMLElement).style.getPropertyValue("--glass-bg"))).toBe("oklch(0.87 0.008 255)");
@@ -210,14 +224,14 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   }
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/admin/timetable?view=week&date=${day}`);
-  await expect(page.locator("tbody a[data-timetable-only]").filter({ hasText: "MP-E2E" })).toBeVisible();
+  await expect(page.locator("tbody a[data-timetable-only]").filter({ hasText: lendCode })).toBeVisible();
   await page.goto(`/admin/timetable?view=month&date=${day}`);
-  await expect(page.locator("[data-timetable-only]:visible").first()).toContainText("MP-E2E");
+  await expect(page.locator("[data-timetable-only]:visible").first()).toContainText(lendCode);
   await page.setViewportSize({ width: 360, height: 740 });
 
   // Trang buổi học: sửa/dời/hủy được nhưng không có Điểm danh, Ghi sao; gọi thẳng địa chỉ cũng không vào được.
   await page.goto(`/admin/sessions/${todaySession!.id}`);
-  await expect(page.getByRole("heading", { name: /Buổi học MP-E2E/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: new RegExp(`Buổi học ${lendCode}`) })).toBeVisible();
   await expect(page.getByRole("button", { name: "Sửa buổi này" })).toBeVisible();
   await expect(page.getByRole("link", { name: /điểm danh/i })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Ghi sao" })).toHaveCount(0);
@@ -228,12 +242,12 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   for (const url of ["/admin/attendance", "/admin/enrollments", "/admin/tuition", "/admin/timesheet", "/admin/timesheet/rates", "/admin/rewards", "/admin/syllabus", "/admin/reports"]) {
     await page.goto(url);
     await expect(page.getByRole("heading").first()).toBeVisible();
-    await expect(page.getByText(/MP-E2E/)).toHaveCount(0);
-    await expect(page.locator("option").filter({ hasText: "MP-E2E" })).toHaveCount(0);
+    await expect(page.getByText(new RegExp(`${lendCode}|Mượn phòng E2E`))).toHaveCount(0);
+    await expect(page.locator("option").filter({ hasText: new RegExp(`${lendCode}|Mượn phòng E2E`) })).toHaveCount(0);
   }
   // Bộ lọc lớp của Thời khóa biểu và ngày nghỉ theo lớp thì có.
   await page.goto(`/admin/timetable?date=${day}`);
-  await expect(page.getByLabel("Lọc theo lớp").locator("option").filter({ hasText: "MP-E2E" })).toHaveCount(1);
+  await expect(page.getByLabel("Lọc theo lớp").locator("option").filter({ hasText: lendCode })).toHaveCount(1);
 
   // Tệp xuất Thời khóa biểu không gồm lớp này, kể cả khi lọc đúng lớp đó.
   for (const query of [`from=${day}&to=${day}`, `from=${day}&to=${day}&classId=${lendId}`]) {
@@ -243,7 +257,8 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
     await book.xlsx.load((await file.body()) as unknown as ArrayBuffer);
     const cells: string[] = [];
     book.eachSheet((sheet) => sheet.eachRow((row) => row.eachCell((cell) => cells.push(String(cell.value ?? "")))));
-    expect(cells.join("|")).not.toContain("MP-E2E");
+    expect(cells.join("|")).not.toContain(lendCode);
+    expect(cells.join("|")).not.toContain("Mượn phòng E2E");
   }
 });
 
@@ -282,7 +297,7 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
     await expect(page.locator('[data-roster="RB-CB01"]').first().getByRole("link")).toHaveText(/^Robotics Cơ bản 01 - \S/);
     // Lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu không có trong bảng.
     await expect(page.locator('[data-roster="RB-NC01"]')).toHaveCount(0);
-    await expect(page.locator('[data-roster="MP-E2E"]')).toHaveCount(0);
+    await expect(page.locator("[data-roster]").filter({ hasText: "Mượn phòng E2E" })).toHaveCount(0);
 
     const block = blocks.nth(0);
     await expect(block.getByRole("columnheader")).toHaveText(["STT", "Họ tên HS", "Lớp"]);
@@ -488,10 +503,12 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
     // Em vắng buổi hôm qua → nằm trong "Cần học bù"; xếp học ghép vào buổi hôm nay của lớp khác.
     const [student] = await db`select id from students where full_name = ${WAITING}`;
     await db`insert into attendances (session_id, student_id, status) values (${absent!.id}, ${student!.id}, 'absent')`;
-    // Một buổi em có mặt, giáo viên chọn bài từ Syllabus: hiện ở Chương trình học và tính vào số buổi đã học.
+    // Một buổi em có mặt, giáo viên chọn bài từ Syllabus (nhãn kèm tên khóa): hiện ở Chương trình học và tính vào số buổi đã học của khóa đó.
+    const [course] = await db`select name, total_sessions from courses order by name limit 1`;
+    const courseName = course!.name as string;
     const [learned] = await db`
       insert into sessions (class_id, date, start_time, end_time, status, content)
-      values (${classId("HB-E2E")}, ${shift(day, -2)}, '18:00', '19:30', 'done', 'Buổi 2 – Lắp ráp thử') returning id`;
+      values (${classId("HB-E2E")}, ${shift(day, -2)}, '18:00', '19:30', 'done', ${`${courseName} · Buổi 2 – Lắp ráp thử`}) returning id`;
     await db`insert into attendances (session_id, student_id, status) values (${learned!.id}, ${student!.id}, 'present')`;
     await page.reload();
     const need = page.locator(`[data-makeup="${firstCode}"]`);
@@ -531,12 +548,12 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
     await expect(page.getByRole("heading", { name: /^Chương trình học/ })).toContainText("1 bài đã học");
     const lessonRow = page.locator('[data-lesson="HB-E2E"]');
     await expect(lessonRow).toHaveCount(1);
-    await expect(lessonRow).toContainText("Bài 2: Lắp ráp thử");
+    await expect(lessonRow).toContainText(`${courseName} · Bài 2: Lắp ráp thử`);
     await expect(lessonRow).toContainText("Lớp thử học bù - ");
     await expect(page.getByText("Bài thử học bù")).toHaveCount(0);
-    // Lịch sử buổi học: số buổi đã học trên tổng số buổi của khóa; mỗi hàng Ngày - Tên lớp (- Giáo viên), không còn tên bài.
+    // Lịch sử buổi học: mỗi khóa em đã học một dòng "Tên khóa - Đã học: n/tổng buổi"; mỗi hàng Ngày - Tên lớp (- Giáo viên), không còn tên bài.
     await expect(page.getByRole("heading", { name: /Lịch sử buổi học/ })).toBeVisible();
-    await expect(page.locator('[data-progress="HB-E2E"]')).toHaveText(/^Lớp thử học bù - Đã học: 1\/\d+ buổi$/);
+    await expect(page.locator("[data-progress]")).toHaveText([`${courseName} - Đã học: 1/${course!.total_sessions} buổi`]);
     const sessionRows = page.locator('[data-session="HB-E2E"]');
     await expect(sessionRows).toHaveCount(2);
     await expect(sessionRows.first()).toContainText(/\d{2}\/\d{2}\/\d{4} - Lớp thử học bù/);
@@ -636,7 +653,7 @@ test("Học phí: đặt học phí lớp, thu hai lần, theo dõi trạng thá
   await expect(page.getByRole("link", { name: "In phiếu" })).toHaveCount(1);
 });
 
-test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa), sửa tên bài và sản phẩm, nhập Excel; GV tự soạn lớp mình, điểm danh chọn tên bài; hồ sơ hiện bài đã học", async ({ page, browser }) => {
+test("Syllabus theo Lớp + Khóa học + Buổi: menu sau Lớp học; Admin thêm, sửa, nhập Excel theo tên lớp; GV tự soạn lớp mình, điểm danh chọn bài kèm tên khóa; hồ sơ hiện bài và số buổi đã học theo khóa", async ({ page, browser }) => {
   test.setTimeout(120_000);
   await login(page, "admin", NEW_PASSWORD);
   await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
@@ -644,13 +661,11 @@ test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa)
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 
   const db = sql();
-  const [cls] = await db`select k.id as course_id, k.name as course_name from classes c join courses k on k.id = c.course_id where c.id = ${classId}`;
-  const [otherCourse] = await db`insert into courses (name, total_sessions) values ('Khóa thử Syllabus E2E', 10) returning id`;
-  // Khóa khác có một lớp riêng, để kiểm tra ô Lớp học lọc theo Khóa học.
-  await db`
-    insert into classes (code, name, course_id, start_date, end_date, max_size)
-    values ('SY-E2E', 'Lớp khóa khác', ${otherCourse!.id}, ${shift(today(), -7)}, ${shift(today(), 30)}, 5)`;
-  const courseId = cls!.course_id as string;
+  const CLASS = "Lớp có trợ giảng";
+  // Khóa có sẵn ở menu Khóa học, và một khóa thứ hai để lớp học tiếp (một lớp học nhiều khóa).
+  const [course] = await db`select id, name, total_sessions from courses order by name limit 1`;
+  const [next] = await db`insert into courses (name, total_sessions) values ('Khóa thử Syllabus E2E', 10) returning id, name`;
+  const [courseId, courseName, nextId, nextName] = [course!.id as string, course!.name as string, next!.id as string, next!.name as string];
   const saved = async (text: string | RegExp) => {
     await expect(page.getByText(text)).toBeVisible();
     await expect(page.getByText(text)).toHaveCount(0);
@@ -659,7 +674,7 @@ test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa)
   try {
     await page.goto(`/admin/syllabus?classId=${classId}`);
     await expect(page.getByRole("heading", { name: /^Syllabus/ })).toBeVisible();
-    // Menu: Syllabus là mục riêng ngay sau nhóm Admin, liền trước Lớp học (không còn nằm trong nhóm Giám đốc).
+    // Menu: … Admin, Lớp học, Syllabus, Ghi danh…
     const menu = page.getByRole("dialog");
     await expect(async () => {
       await page.getByRole("button", { name: "Mở menu" }).click();
@@ -667,44 +682,39 @@ test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa)
     }).toPass();
     const entries = (await menu.locator("a, button").allTextContents()).map((label) => label.trim());
     const at = (name: string) => entries.indexOf(name);
-    expect(at("Giám đốc")).toBeGreaterThan(-1);
     expect(at("Admin")).toBeGreaterThan(at("Giám đốc"));
-    expect(at("Syllabus")).toBeGreaterThan(at("Admin"));
-    expect(at("Lớp học") - at("Syllabus")).toBe(1);
+    expect(at("Lớp học")).toBeGreaterThan(at("Admin"));
+    expect([at("Syllabus") - at("Lớp học"), at("Ghi danh") - at("Syllabus")]).toEqual([1, 1]);
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
 
-    // Nút Thêm: chọn Khóa học, Lớp học chỉ gồm lớp của khóa vừa chọn, nhập Buổi, Tên bài/Chủ đề, Sản phẩm.
-    await page.getByRole("button", { name: "Thêm", exact: true }).click();
-    await expect(page.locator("#f-subjectCode")).toHaveCount(0);
-    await expect(page.locator("#f-courseId")).toHaveValue(courseId);
-    await expect(page.locator("#f-classId")).toHaveValue(classId);
-    await page.locator("#f-courseId").selectOption(otherCourse!.id as string);
-    await expect(page.locator("#f-classId option").filter({ hasText: "RB-TG01" })).toHaveCount(0);
-    await expect(page.locator("#f-classId option").filter({ hasText: "SY-E2E" })).toHaveCount(1);
-    await page.locator("#f-courseId").selectOption(courseId);
-    await expect(page.locator("#f-classId option").filter({ hasText: "SY-E2E" })).toHaveCount(0);
-    await expect(page.locator("#f-classId option").filter({ hasText: "RB-TG01" })).toHaveCount(1);
-    await page.locator("#f-classId").selectOption(classId);
-    await page.locator("#f-period").fill("1");
-    await page.locator("#f-title").fill("Làm quen robot");
-    await page.locator("#f-product").fill("Robot E2E");
-    await expectNoHorizontalScroll(page);
-    await page.getByRole("button", { name: "Lưu" }).click();
+    // Nút Thêm: chọn Lớp học (theo tên lớp ở menu Lớp học), chọn Khóa học (ở menu Khóa học), nhập Buổi, Tên bài/Chủ đề, Sản phẩm.
+    const add = async (course: string, period: string, title: string, product = "") => {
+      await page.getByRole("button", { name: "Thêm", exact: true }).click();
+      await expect(page.locator("#f-classId")).toHaveValue(classId);
+      await expect(page.locator("#f-classId option:checked")).toHaveText(CLASS);
+      await page.locator("#f-courseId").selectOption(course);
+      await page.locator("#f-period").fill(period);
+      await page.locator("#f-title").fill(title);
+      await page.locator("#f-product").fill(product);
+      await page.getByRole("button", { name: "Lưu" }).click();
+    };
+    await add(courseId, "1", "Làm quen robot", "Robot E2E");
     await saved("Đã lưu.");
     await expect(visibleText(page, "Làm quen robot")).toBeVisible();
-
-    // Trùng Lớp học + Buổi bị chặn.
-    await page.getByRole("button", { name: "Thêm", exact: true }).click();
-    await page.locator("#f-period").fill("1");
-    await page.locator("#f-title").fill("Trùng buổi");
-    await page.getByRole("button", { name: "Lưu" }).click();
-    await expect(page.getByText("Lớp này đã có bài ở Buổi đó.").first()).toBeVisible();
+    // Cùng lớp, khóa khác cũng có Buổi 1; ô Khóa học độc lập với lớp.
+    await add(nextId, "1", "Buổi 1 khóa thử E2E");
+    await saved("Đã lưu.");
+    // Trùng Lớp + Khóa + Buổi bị chặn.
+    await add(courseId, "1", "Trùng buổi");
+    await expect(page.getByText("Lớp này đã có bài ở Buổi đó của khóa học này.").first()).toBeVisible();
+    await expectNoHorizontalScroll(page);
     await page.getByRole("button", { name: "Hủy" }).click();
 
-    // Sửa: đổi tên bài và sản phẩm; khóa và lớp của bài không đổi được.
-    await page.getByRole("button", { name: "Sửa RB-TG01 · Buổi 1" }).click();
+    // Sửa: đổi tên bài và sản phẩm; lớp và khóa của bài không đổi được.
+    await page.getByRole("button", { name: `Sửa ${CLASS} · ${courseName} · Buổi 1` }).click();
     await expect(page.locator("#f-classId")).toHaveCount(0);
+    await expect(page.locator("#f-courseId")).toHaveCount(0);
     await expect(page.locator("#f-period")).toHaveValue("1");
     await page.locator("#f-title").fill("Làm quen với robot E2E");
     await page.locator("#f-product").fill("Robot chào hỏi E2E");
@@ -712,39 +722,40 @@ test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa)
     await saved("Đã lưu.");
     await expect(visibleText(page, "Robot chào hỏi E2E")).toBeVisible();
 
-    // Nhập Excel theo cột mới: xem trước báo lỗi dòng sai khóa, nhập dòng hợp lệ.
+    // Nhập Excel: Lớp học ghi tên lớp (hoặc mã lớp), Khóa học phải có trong menu Khóa học.
     const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: "Tải tệp mẫu" }).click()]);
     expect(download.suggestedFilename()).toBe("mau-syllabus.xlsx");
     const book = new ExcelJS.Workbook();
     const sheet = book.addWorksheet("Syllabus");
     sheet.addRow(["Khóa học", "Lớp học", "Buổi", "Tên bài/Chủ đề", "Sản phẩm"]);
-    sheet.addRow([cls!.course_name, "RB-TG01", 3, "Động cơ E2E", "Xe chạy thẳng E2E"]);
-    sheet.addRow([cls!.course_name, "RB-TG01", 2, "Lắp ráp khung xe E2E", ""]);
-    sheet.addRow(["Khóa thử Syllabus E2E", "RB-TG01", 4, "Sai khóa", ""]);
+    sheet.addRow([courseName, CLASS, 3, "Động cơ E2E", "Xe chạy thẳng E2E"]);
+    sheet.addRow([courseName, "RB-TG01", 2, "Lắp ráp khung xe E2E", ""]);
+    sheet.addRow(["Khóa lạ E2E", CLASS, 4, "Sai khóa", ""]);
     await page.getByRole("link", { name: "Nhập Excel" }).click();
     await expect(page.getByRole("heading", { name: "Nhập Syllabus từ Excel" })).toBeVisible();
     await page.locator("#file").setInputFiles({ name: "syllabus.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) });
     await page.getByRole("button", { name: "Xem trước" }).click();
     await expect(page.getByText(/2 dòng hợp lệ, 1 dòng lỗi/)).toBeVisible();
-    await expect(page.getByText(/Lớp RB-TG01 thuộc khóa/)).toBeVisible();
+    await expect(page.getByText('Không có khóa học "Khóa lạ E2E" trong menu Khóa học')).toBeVisible();
     await expectNoHorizontalScroll(page);
     await page.getByRole("button", { name: "Nhập 2 dòng hợp lệ" }).click();
     await expect(page.getByText("Đã thêm 2 bài, cập nhật 0 bài.")).toBeVisible();
 
-    // Bảng xem: Buổi 1 trước, rồi 2, 3; có cột Sản phẩm.
+    // Bảng xem lọc theo khóa và lớp: Buổi 1 trước, rồi 2, 3; cột Lớp học chỉ hiện tên lớp; có cột Sản phẩm.
     await page.goto(`/admin/syllabus?courseId=${courseId}&classId=${classId}`);
-    const cards = page.locator("li").filter({ hasText: "RB-TG01 – Lớp có trợ giảng" });
+    const cards = page.locator("li").filter({ hasText: new RegExp(`Lớp học:\\s*${CLASS}`) });
     await expect(cards).toHaveCount(3);
     await expect(cards.nth(0)).toContainText("Làm quen với robot E2E");
     await expect(cards.nth(1)).toContainText("Lắp ráp khung xe E2E");
     await expect(cards.nth(2)).toContainText("Động cơ E2E");
     await expect(cards.nth(2)).toContainText("Xe chạy thẳng E2E");
+    await expect(cards.nth(0)).not.toContainText("RB-TG01");
     await expectNoHorizontalScroll(page);
-    // Lọc theo khóa khác: không có bài, ô Lớp học chỉ còn lớp của khóa đó.
-    await page.goto(`/admin/syllabus?courseId=${otherCourse!.id}`);
-    await expect(page.getByText("Chưa có bài học nào.")).toBeVisible();
-    await expect(page.locator('select[name="classId"] option').filter({ hasText: "RB-TG01" })).toHaveCount(0);
-    await expect(page.locator('select[name="classId"] option').filter({ hasText: "SY-E2E" })).toHaveCount(1);
+    // Lọc theo khóa thứ hai: chỉ bài của khóa đó; ô Lớp học vẫn có đủ lớp (hai ô lọc độc lập).
+    await page.goto(`/admin/syllabus?courseId=${nextId}`);
+    await expect(page.getByRole("heading", { name: /^Syllabus/ })).toContainText("(1)");
+    await expect(visibleText(page, "Buổi 1 khóa thử E2E")).toBeVisible();
+    await expect(page.locator('select[name="classId"] option').filter({ hasText: CLASS })).toHaveCount(1);
 
     // Buổi học hôm nay của lớp, do GV01 (gv.lan) dạy.
     const [lan] = await db`select teacher_id from "user" where username = 'gv.lan'`;
@@ -760,51 +771,60 @@ test("Syllabus theo buổi: menu sau Admin; Admin thêm (lớp lọc theo khóa)
     await login(teacher, "gv.lan", NEW_PASSWORD);
     await expect(teacher).toHaveURL(/\/teacher\/dashboard$/);
     await teacher.goto(`/admin/syllabus?classId=${classId}`);
-    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(3)");
+    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(4)");
     await expect(teacher.getByRole("link", { name: "Nhập Excel" })).toBeVisible();
     await teacher.getByRole("button", { name: "Thêm", exact: true }).click();
+    await teacher.locator("#f-courseId").selectOption(courseId);
     await teacher.locator("#f-period").fill("9");
     await teacher.locator("#f-title").fill("Bài giáo viên soạn E2E");
     await teacher.getByRole("button", { name: "Lưu" }).click();
     await expect(teacher.getByText("Đã lưu.")).toBeVisible();
-    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(4)");
+    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(5)");
     teacher.once("dialog", (confirm) => void confirm.accept());
-    await teacher.getByRole("button", { name: "Xóa RB-TG01 · Buổi 9" }).click();
+    await teacher.getByRole("button", { name: `Xóa ${CLASS} · ${courseName} · Buổi 9` }).click();
     await expect(teacher.getByText("Đã xóa.")).toBeVisible();
-    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(3)");
+    await expect(teacher.getByRole("heading", { name: /^Syllabus/ })).toContainText("(4)");
     await expectNoHorizontalScroll(teacher);
 
-    // Điểm danh: ô Nội dung buổi học liệt kê bài của lớp theo buổi, dạng "Buổi n – Tên bài".
+    // Điểm danh: ô Nội dung buổi học liệt kê bài của lớp theo khóa rồi theo buổi, dạng "Tên khóa · Buổi n – Tên bài".
+    const lessonOne = `${courseName} · Buổi 1 – Làm quen với robot E2E`;
     await teacher.goto(`/teacher/sessions/${sessionId}/attendance`);
     const content = teacher.getByLabel("Nội dung buổi học", { exact: true });
-    await expect(content.locator("option").filter({ hasText: /^Buổi \d/ })).toHaveText(["Buổi 1 – Làm quen với robot E2E", "Buổi 2 – Lắp ráp khung xe E2E", "Buổi 3 – Động cơ E2E"]);
-    await content.selectOption({ label: "Buổi 1 – Làm quen với robot E2E" });
+    await expect(content.locator("option").filter({ hasText: / · Buổi \d/ })).toHaveText([
+      `${nextName} · Buổi 1 – Buổi 1 khóa thử E2E`,
+      lessonOne,
+      `${courseName} · Buổi 2 – Lắp ráp khung xe E2E`,
+      `${courseName} · Buổi 3 – Động cơ E2E`,
+    ]);
+    await content.selectOption({ label: lessonOne });
     // Chọn "Khác" thì hiện ô gõ; chọn lại bài thì ô gõ ẩn đi.
     await content.selectOption({ label: "Khác (tự nhập)" });
     await expect(teacher.getByLabel("Nội dung buổi học (tự nhập)")).toBeVisible();
-    await content.selectOption({ label: "Buổi 1 – Làm quen với robot E2E" });
+    await content.selectOption({ label: lessonOne });
     await expect(teacher.getByLabel("Nội dung buổi học (tự nhập)")).toHaveCount(0);
     await teacher.getByLabel("Nhận xét của giáo viên sau buổi dạy").fill("Lớp học tốt E2E");
     await expectNoHorizontalScroll(teacher);
     await teacher.getByRole("button", { name: "Lưu điểm danh" }).click();
     await expect(teacher.getByText(/Đã lưu điểm danh/)).toBeVisible();
     await teacher.reload();
-    await expect(content).toHaveValue("Buổi 1 – Làm quen với robot E2E");
+    await expect(content).toHaveValue(lessonOne);
     await expect(teacher.getByLabel("Nhận xét của giáo viên sau buổi dạy")).toHaveValue("Lớp học tốt E2E");
     await teacherContext.close();
 
     await page.goto(`/admin/sessions/${sessionId}`);
-    await expect(page.getByText("Buổi 1 – Làm quen với robot E2E")).toBeVisible();
+    await expect(page.getByText(lessonOne)).toBeVisible();
     await expect(page.getByText("Lớp học tốt E2E")).toBeVisible();
 
-    // Hồ sơ học viên của lớp: tên bài này hiện ở Chương trình học là bài em đã học.
+    // Hồ sơ học viên của lớp: bài này hiện ở Chương trình học kèm tên khóa, và tính 1 buổi đã học của khóa đó.
     const [enrolled] = await db`select student_id from enrollments where class_id = ${classId} and status = 'active' limit 1`;
     await page.goto(`/admin/students/${enrolled!.student_id}`);
-    await expect(page.locator('[data-lesson="RB-TG01"]').filter({ hasText: "Bài 1: Làm quen với robot E2E" })).toHaveCount(1);
+    await expect(page.locator('[data-lesson="RB-TG01"]').filter({ hasText: `${courseName} · Bài 1: Làm quen với robot E2E` })).toHaveCount(1);
+    await expect(page.locator(`[data-progress="${courseName}"]`)).toHaveText(`${courseName} - Đã học: 1/${course!.total_sessions} buổi`);
     await expectNoHorizontalScroll(page);
   } finally {
-    await db`delete from classes where code = 'SY-E2E'`;
-    await db`delete from courses where id = ${otherCourse!.id}`;
+    // Khóa thử chỉ xóa được khi không còn bài Syllabus nào thuộc khóa đó.
+    await db`delete from syllabus_lessons where course_id = ${nextId}`;
+    await db`delete from courses where id = ${nextId}`;
     await db.end();
   }
 });

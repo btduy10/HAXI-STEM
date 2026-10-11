@@ -191,16 +191,16 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
         <h2 id="sessions-title" className="font-medium">
           Lịch sử buổi học
         </h2>
-        {/* Mỗi lớp em đã ghi danh: số buổi đã học (có mặt, kể cả học bù xong) trên tổng số buổi của khóa. */}
-        {history.programs.length > 0 && (
+        {/* Mỗi khóa em đã học: số buổi khác nhau của khóa em có mặt (kể cả học bù) trên tổng số buổi của khóa. */}
+        {history.courses.length > 0 && (
           <ul className="grid gap-0.5 text-sm">
-            {history.programs.map((p) => (
-              <li key={p.classId} data-progress={p.classCode} className="break-words">
-                {p.className} -{" "}
+            {history.courses.map((c) => (
+              <li key={c.courseName} data-progress={c.courseName} className="break-words">
+                {c.courseName} -{" "}
                 <span className="font-semibold">
-                  Đã học: {p.learned}/{p.totalSessions} buổi
+                  Đã học: {c.learned}
+                  {c.totalSessions !== null && `/${c.totalSessions}`} buổi
                 </span>
-                {p.status === "left" && p.leftAt && <span className="text-muted-foreground"> (rời lớp {formatDate(p.leftAt)})</span>}
               </li>
             ))}
           </ul>

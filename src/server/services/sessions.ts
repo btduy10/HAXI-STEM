@@ -6,7 +6,6 @@ import {
   attendances,
   classTeachers,
   classes,
-  courses,
   enrollments,
   holidays,
   rooms,
@@ -25,7 +24,7 @@ import {
   planSessions,
   staffOf,
 } from "@/domain/schedule";
-import { WEEKDAY_LABELS, addDays } from "@/lib/dates";
+import { WEEKDAY_LABELS } from "@/lib/dates";
 import { formatDate, todayIso } from "@/lib/format";
 import type {
   makeupInput,
@@ -147,20 +146,16 @@ export async function nextSessionDate(actor: Actor, classId: string, from: strin
 }
 
 /**
- * Tình trạng lịch học của lớp cho trang Lớp học: số buổi đã xếp so với khóa học, buổi đầu/cuối,
+ * Tình trạng lịch học của lớp cho trang Lớp học: số buổi đã xếp, buổi đầu/cuối,
  * số buổi đã dạy, buổi chưa có GV chính, và vài buổi sắp tới (kèm GV, trợ giảng, phòng).
  */
 export async function classScheduleOverview(actor: Actor, classId: string, today: string = todayIso()) {
   assertCanAny(actor, ["classes", "view"], ["timetable", "view"]);
   await assertClassAccess(actor, classId);
-  const [[cls], all] = await Promise.all([
-    db.select({ totalSessions: courses.totalSessions }).from(classes).innerJoin(courses, eq(courses.id, classes.courseId)).where(eq(classes.id, classId)).limit(1),
-    sessionQuery().where(eq(sessions.classId, classId)).orderBy(asc(sessions.date), asc(sessions.startTime)),
-  ]);
+  const all = await sessionQuery().where(eq(sessions.classId, classId)).orderBy(asc(sessions.date), asc(sessions.startTime));
   const active = all.filter((s) => s.status !== "cancelled");
   const regular = active.filter((s) => s.kind === "regular");
   return {
-    courseSessions: cls?.totalSessions ?? 0,
     scheduled: regular.length,
     done: active.filter((s) => s.status === "done").length,
     cancelled: all.length - active.length,
@@ -280,7 +275,7 @@ async function untouchedFutureSessions(tx: Tx, cls: ClassRow, from: string, appl
 
 /**
  * Xếp lại các buổi sắp tới của cả lớp theo toàn bộ lịch mẫu (sau khi thêm dòng lịch mẫu hoặc đổi thứ):
- * bỏ các buổi sắp tới còn nguyên như lịch mẫu sinh ra rồi sinh lại theo thứ tự ngày, đủ số buổi của khóa học.
+ * bỏ các buổi sắp tới còn nguyên như lịch mẫu sinh ra rồi sinh lại theo thứ tự ngày, đến ngày kết thúc của lớp.
  * Buổi đã dạy, đã điểm danh/ghi sao, đã dời hay sửa tay được giữ nguyên.
  */
 async function reflowClass(tx: Tx, actor: Actor, cls: ClassRow, from: string): Promise<GenerationResult> {
@@ -293,7 +288,7 @@ async function reflowClass(tx: Tx, actor: Actor, cls: ClassRow, from: string): P
   return { ...result, created: result.created - recreated, alreadyExisting: result.alreadyExisting + recreated };
 }
 
-/** Thêm dòng lịch mẫu rồi tự xếp lại các buổi sắp tới của lớp cho đủ số buổi của khóa học (bỏ ngày nghỉ, báo buổi bị trùng). */
+/** Thêm dòng lịch mẫu rồi tự xếp lại các buổi sắp tới của lớp đến ngày kết thúc của lớp (bỏ ngày nghỉ, báo buổi bị trùng). */
 /** Một lớp không có hai dòng lịch mẫu cùng Thứ + Ca + Khung giờ. */
 async function assertTemplateUnique(tx: Tx, classId: string, data: { weekday: number; timeSlotId: string }, exceptId?: string) {
   const conditions = [eq(scheduleTemplates.classId, classId), eq(scheduleTemplates.weekday, data.weekday), eq(scheduleTemplates.timeSlotId, data.timeSlotId)];
@@ -366,7 +361,7 @@ export async function updateTemplate(
     const newValues = applied(after!);
 
     if (before.weekday !== after!.weekday) {
-      // Đổi thứ: buổi sắp tới chưa điểm danh của dòng này được bỏ, rồi xếp lại cả lớp theo lịch mẫu mới cho đủ số buổi khóa học.
+      // Đổi thứ: buổi sắp tới chưa điểm danh của dòng này được bỏ, rồi xếp lại cả lớp theo lịch mẫu mới đến ngày kết thúc của lớp.
       if (upcoming.length > 0) {
         await tx.delete(sessions).where(inArray(sessions.id, upcoming.map((u) => u.id)));
       }
@@ -536,11 +531,8 @@ export type GenerationResult = {
   alreadyExisting: number;
   conflicts: { date: string; startTime: string; reason: string }[];
   warnings: string[];
-  /** Số buổi theo khóa học và số buổi lớp đang có (không tính buổi hủy, buổi bù). */
-  courseSessions?: number;
+  /** Số buổi lớp đang có (không tính buổi hủy, buổi bù). */
   scheduled?: number;
-  /** Ngày kết thúc mới của lớp khi phải xếp tiếp sau ngày kết thúc cũ cho đủ số buổi. */
-  endDateExtendedTo?: string;
   /** Thông báo cho người dùng sau khi tự sinh/cập nhật buổi (hiện dạng toast thông tin). */
   notices?: string[];
 };
@@ -558,7 +550,7 @@ function withNotices<T extends GenerationResult & { updated?: number }>(result: 
  * Nút "Sinh buổi học từ lịch mẫu": xếp lại toàn bộ lịch của lớp theo lịch mẫu hiện tại.
  * Bỏ mọi buổi thường CHƯA DẠY (chưa điểm danh, chưa ghi sao, chưa hủy) — kể cả buổi xếp tay hay đã sửa riêng —
  * rồi sinh lại trong khoảng ngày của lớp, đúng thứ, ca, phòng và GV chính/trợ giảng của từng dòng lịch mẫu,
- * cho đủ số buổi của khóa học. Buổi đã dạy và buổi đã hủy được giữ và vẫn được tính.
+ * cho mọi tuần trong thời gian của lớp (lớp không gắn với khóa học nên không có số buổi cố định). Buổi đã dạy và buổi đã hủy được giữ.
  */
 export async function rebuildSchedule(actor: Actor, classId: string): Promise<GenerationResult & { removed: number }> {
   assertCan(actor, "classes", "edit");
@@ -616,8 +608,6 @@ async function generateInTx(tx: Tx, actor: Actor, classId: string, templateId?: 
   const [cls] = await tx.select().from(classes).where(eq(classes.id, classId)).limit(1);
   if (!cls) throw notFound("lớp học");
   if (cls.status !== "open") throw new AppError("CONFLICT", "Lớp đã đóng, không thể sinh buổi học.");
-  const [course] = await tx.select({ totalSessions: courses.totalSessions }).from(courses).where(eq(courses.id, cls.courseId)).limit(1);
-  const courseSessions = course?.totalSessions ?? 0;
 
   const templates = await tx
     .select({
@@ -637,8 +627,8 @@ async function generateInTx(tx: Tx, actor: Actor, classId: string, templateId?: 
     .where(and(eq(scheduleTemplates.classId, classId), templateId ? eq(scheduleTemplates.id, templateId) : undefined));
   if (templates.length === 0) throw new AppError("VALIDATION", "Lớp chưa có lịch mẫu.");
 
-  // Chưa đủ số buổi khóa học trong thời gian lớp thì xếp tiếp các tuần sau (tối đa 1 năm) và lùi ngày kết thúc của lớp.
-  const horizon = addDays(cls.endDate, 366);
+  // Lớp không gắn với một khóa học nên không có số buổi cố định: xếp buổi cho mọi tuần từ ngày bắt đầu đến ngày kết thúc của lớp.
+  const horizon = cls.endDate;
   const holidayRows = await tx
     .select({ date: holidays.date })
     .from(holidays)
@@ -682,12 +672,10 @@ async function generateInTx(tx: Tx, actor: Actor, classId: string, templateId?: 
   // Ngày + khung giờ mà CHÍNH lớp này đã có buổi: dòng lịch mẫu bị lặp (cùng thứ, cùng khung) không tạo buổi thứ hai
   // và cũng không bị báo là trùng lịch với chính lớp mình.
   const ownSlots = new Set(existing.filter((s) => s.status !== "cancelled" && s.timeSlotId).map((s) => `${s.date}|${s.timeSlotId}`));
-  // Số buổi của lớp không vượt số buổi của khóa học: buổi thường chưa hủy đã có được tính trước.
   const counted = existing.filter((s) => s.kind === "regular" && s.status !== "cancelled").length;
-  const room = Math.max(0, courseSessions - counted);
 
   const busy = await loadBusy(tx, cls.startDate, horizon);
-  const result: GenerationResult = { created: 0, alreadyExisting: 0, conflicts: [], warnings: [], courseSessions };
+  const result: GenerationResult = { created: 0, alreadyExisting: 0, conflicts: [], warnings: [] };
   const toInsert: (typeof sessions.$inferInsert)[] = [];
 
   for (const p of planned) {
@@ -699,7 +687,6 @@ async function generateInTx(tx: Tx, actor: Actor, classId: string, templateId?: 
       result.alreadyExisting++;
       continue;
     }
-    if (toInsert.length >= room) break;
     if (p.assistantTeacherId && p.assistantTeacherId === p.teacherId) {
       result.conflicts.push({ date: p.date, startTime: p.startTime, reason: "Trợ giảng trùng với giáo viên chính" });
       continue;
@@ -716,23 +703,6 @@ async function generateInTx(tx: Tx, actor: Actor, classId: string, templateId?: 
   }
 
   result.scheduled = counted + toInsert.length;
-  if (result.scheduled < courseSessions) {
-    result.warnings.push(`Khóa học có ${courseSessions} buổi nhưng chỉ xếp được ${result.scheduled} buổi. Hãy kiểm tra lịch mẫu và các buổi bị trùng lịch.`);
-  }
-  const lastDate = toInsert.reduce((max, s) => (s.date > max ? s.date : max), cls.endDate);
-  if (lastDate > cls.endDate) {
-    await tx.update(classes).set({ endDate: lastDate, updatedAt: new Date() }).where(eq(classes.id, cls.id));
-    await audit(tx, {
-      userId: actor.userId,
-      action: "class_end_extended",
-      tableName: "classes",
-      recordId: cls.id,
-      oldValue: { endDate: cls.endDate },
-      newValue: { endDate: lastDate },
-    });
-    result.endDateExtendedTo = lastDate;
-    result.warnings.push(`Để đủ ${courseSessions} buổi, ngày kết thúc của lớp được lùi từ ${formatDate(cls.endDate)} sang ${formatDate(lastDate)}.`);
-  }
   if (toInsert.length > 0) {
     await tx.insert(sessions).values(toInsert);
     result.created = toInsert.length;

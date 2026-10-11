@@ -63,7 +63,7 @@ export async function summaryDoc(actor: Actor, classId: string): Promise<ExportD
   return {
     filename: `tong-ket-${summary.class.code}`,
     title: `Tổng kết lớp ${summary.class.code} – ${summary.class.name}`,
-    subtitle: summary.finalizedAt ? `${summary.class.courseName} · chốt lúc ${formatDateTime(summary.finalizedAt)}` : "Chưa chốt tổng kết",
+    subtitle: summary.finalizedAt ? `Chốt lúc ${formatDateTime(summary.finalizedAt)}` : "Chưa chốt tổng kết",
     sections: [
       {
         title: "Xếp hạng và quà tặng",

@@ -81,17 +81,21 @@ describe("sinh buổi học", () => {
     // Lớp B cùng Thứ Ba, cùng ca + khung giờ, cùng phòng Lab với lớp A.
     await template(f.classB.id, 2, morning.id);
     const result = await svc.generateSessions(f.admin, f.classB.id);
-    // Khóa học 10 buổi: lớp A chiếm 10 Thứ Ba đầu (06/01–10/03); 10 Thứ Ba đó của lớp B bị trùng phòng.
-    // Lớp B được xếp vào các Thứ Ba sau đó cho đủ 10 buổi, vượt ngày kết thúc 31/03 nên ngày kết thúc được lùi tới buổi cuối.
-    expect(result.conflicts).toHaveLength(10);
+    // Lớp A chiếm cả 13 Thứ Ba trong thời gian học (06/01–31/03); 13 Thứ Ba đó của lớp B bị trùng phòng.
+    // Buổi chỉ xếp trong thời gian của lớp: không xếp sang các tuần sau và không lùi ngày kết thúc.
+    expect((await sessionsOf(f.classA.id)).map((x) => x.date)).toHaveLength(13);
+    expect(result.conflicts).toHaveLength(13);
     expect(result.conflicts[0]!.reason).toContain("Phòng");
     expect(result.conflicts[0]!.reason).toContain("(cùng ca, cùng khung giờ)");
-    expect(result.created).toBe(10);
-    const dates = (await sessionsOf(f.classB.id)).map((x) => x.date);
-    expect([dates[0], dates.at(-1)]).toEqual(["2026-03-17", "2026-05-19"]);
-    expect(result.warnings.join(" ")).toContain("được lùi từ 31/03/2026 sang 19/05/2026");
+    expect(result.created).toBe(0);
+    expect(await sessionsOf(f.classB.id)).toEqual([]);
+    expect(result.warnings.join(" ")).not.toContain("được lùi");
     const [classB] = await db.select().from(classes).where(eq(classes.id, f.classB.id));
-    expect(classB!.endDate).toBe("2026-05-19");
+    expect(classB!.endDate).toBe("2026-03-31");
+    // Lớp học tiếp thì dời ngày kết thúc rồi sinh thêm: các Thứ Ba sau 31/03 không còn trùng.
+    await db.update(classes).set({ endDate: "2026-04-14" }).where(eq(classes.id, f.classB.id));
+    expect((await svc.generateSessions(f.admin, f.classB.id)).created).toBe(2);
+    expect((await sessionsOf(f.classB.id)).map((x) => x.date)).toEqual(["2026-04-07", "2026-04-14"]);
   });
 
   it("khác khung giờ thì không trùng: cùng GV, cùng phòng, cùng thứ vẫn sinh đủ buổi dù giờ hai khung chồng nhau", async () => {
@@ -101,9 +105,9 @@ describe("sinh buổi học", () => {
     await template(f.classB.id, 2, late.id, { teacherId: f.teacherA.id });
     const result = await svc.generateSessions(f.admin, f.classB.id);
     expect(result.conflicts).toEqual([]);
-    expect(result.created).toBe(10);
+    expect(result.created).toBe(13);
     const list = await sessionsOf(f.classB.id);
-    expect([list[0]!.date, list.at(-1)!.date]).toEqual(["2026-01-06", "2026-03-10"]);
+    expect([list[0]!.date, list.at(-1)!.date]).toEqual(["2026-01-06", "2026-03-31"]);
     expect(list.every((x) => x.teacherId === f.teacherA.id && x.roomId === f.room.id)).toBe(true);
   });
 
@@ -465,9 +469,9 @@ describe("lịch mẫu bị lặp trong cùng một lớp", () => {
     await template(f.classA.id, 2, morning.id);
     const result = await svc.rebuildSchedule(f.admin, f.classA.id);
     expect(result.conflicts).toEqual([]);
-    expect(result.created).toBe(10);
+    expect(result.created).toBe(13);
     const dates = (await sessionsOf(f.classA.id)).map((x) => x.date);
-    expect(new Set(dates).size).toBe(10);
+    expect(new Set(dates).size).toBe(13);
     // Trùng với LỚP KHÁC vẫn được báo.
     await template(f.classB.id, 2, morning.id);
     expect((await svc.rebuildSchedule(f.admin, f.classB.id)).conflicts.length).toBeGreaterThan(0);

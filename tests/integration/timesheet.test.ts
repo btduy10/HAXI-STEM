@@ -315,7 +315,7 @@ describe("xuất chấm công", () => {
     ]);
     // Chi tiết: không còn cột Ca, Phòng; cột Thứ không có chữ "Thứ"; cột Lớp là tên lớp; xếp theo ngày rồi giờ.
     expect(detail!.columns.map((c) => c.header)).toEqual([
-      "STT", "Thứ", "Ngày", "Giờ", "Mã GV", "Giáo viên", "Vai trò", "Lớp", "Khóa học", "Trạng thái", "Mức lương (đ)", "Thành tiền (đ)", "Ghi chú",
+      "STT", "Thứ", "Ngày", "Giờ", "Mã GV", "Giáo viên", "Vai trò", "Lớp", "Trạng thái", "Mức lương (đ)", "Thành tiền (đ)", "Ghi chú",
     ]);
     expect(detail!.rows.map((r) => [r[1], r[2], r[4], r[7]])).toEqual([
       ["Ba", "06/01/2026", "GVA", "Lớp A"],

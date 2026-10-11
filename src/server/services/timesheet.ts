@@ -1,7 +1,7 @@
 import { and, between, eq, inArray, ne, or } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "@/db";
-import { classes, courses, rooms, sessions, teacherRates, teachers, timeSlots, timesheetEntries, timesheetOverrides } from "@/db/schema";
+import { classes, rooms, sessions, teacherRates, teachers, timeSlots, timesheetEntries, timesheetOverrides } from "@/db/schema";
 import { WEEKDAY_NAMES, isoWeekday } from "@/lib/dates";
 import { formatDate, formatTime, todayIso } from "@/lib/format";
 import { SLOT_NAME_LABELS, type timesheetAdjustInput, type timesheetEntryInput } from "@/lib/validation/entities";
@@ -181,9 +181,8 @@ async function loadRows(filters: LoadFilters, today: string) {
       : [],
     classIds.length
       ? db
-          .select({ id: classes.id, code: classes.code, name: classes.name, courseName: courses.name })
+          .select({ id: classes.id, code: classes.code, name: classes.name })
           .from(classes)
-          .innerJoin(courses, eq(courses.id, classes.courseId))
           .where(inArray(classes.id, classIds))
       : [],
   ]);
@@ -205,7 +204,6 @@ async function loadRows(filters: LoadFilters, today: string) {
         teacherName: teacherOf.get(r.teacherId)?.fullName ?? "",
         classCode: classOf.get(r.classId)?.code ?? "",
         className: classOf.get(r.classId)?.name ?? "",
-        courseName: classOf.get(r.classId)?.courseName ?? "",
         slotLabel: slotLabel(r.timeSlotId),
         isSubstitute: r.role === "substitute",
         minutes: Math.max(0, minutesOf(r.endTime) - minutesOf(r.startTime)),
@@ -467,7 +465,6 @@ export async function timesheetDoc(actor: Actor, filters: TimesheetFilters, now:
           { header: "Giáo viên", width: 24 },
           { header: "Vai trò", width: 12 },
           { header: "Lớp", width: 26 },
-          { header: "Khóa học", width: 24 },
           { header: "Trạng thái", width: 16 },
           { header: "Mức lương (đ)", width: 16, align: "right" },
           { header: "Thành tiền (đ)", width: 16, align: "right" },
@@ -482,7 +479,6 @@ export async function timesheetDoc(actor: Actor, filters: TimesheetFilters, now:
           r.teacherName,
           TIMESHEET_ROLE_LABEL[r.role],
           r.className,
-          r.courseName,
           STATE_LABEL[r.state],
           r.rate ?? "",
           r.amount ?? "",

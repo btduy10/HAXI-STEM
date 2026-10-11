@@ -127,13 +127,14 @@ describe("mốc quà, duyệt và trao quà", () => {
         { name: "Bộ lắp ráp", stock: 1 },
       ])
       .returning()) as [typeof gifts.$inferSelect, typeof gifts.$inferSelect];
+    // Mốc quà đặt theo lớp (lớp không còn gắn với khóa học).
     await db.insert(rewardTiers).values([
-      { courseId: f.course.id, minStars: 3, giftId: sticker.id },
-      { courseId: f.course.id, minStars: 6, giftId: kit.id },
+      { classId: f.classA.id, minStars: 3, giftId: sticker.id },
+      { classId: f.classA.id, minStars: 6, giftId: kit.id },
     ]);
   });
 
-  it("đề xuất theo mốc cao nhất đạt được; mốc riêng của lớp thay mốc của khóa", async () => {
+  it("đề xuất theo mốc cao nhất đạt được; mốc quà của lớp khác không áp dụng", async () => {
     await close();
     let summary = await summaries.getClassSummary(f.admin, f.classA.id);
     expect(summary.rows.map((r) => [r.code, r.proposedGift?.name ?? null])).toEqual([["A1", "Bộ lắp ráp"], ["A2", "Sticker"]]);
@@ -141,9 +142,16 @@ describe("mốc quà, duyệt và trao quà", () => {
       { name: "Bộ lắp ráp", eligible: 1, approved: 0, given: 0, stock: 1, missing: 0 },
       { name: "Sticker", eligible: 1, approved: 0 },
     ]);
-    await summaries.createTier(f.admin, { classId: f.classA.id, courseId: null, minStars: 5, giftId: sticker.id });
+    // Mốc của lớp B (1 sao đã được Bộ lắp ráp) không đổi đề xuất của lớp A.
+    await summaries.createTier(f.admin, { classId: f.classB.id, minStars: 1, giftId: kit.id });
     summary = await summaries.getClassSummary(f.admin, f.classA.id);
-    expect(summary.rows.map((r) => r.proposedGift?.name ?? null)).toEqual(["Sticker", null]);
+    expect(summary.rows.map((r) => r.proposedGift?.name ?? null)).toEqual(["Bộ lắp ráp", "Sticker"]);
+    // Thêm mốc cao hơn cho lớp A: em đạt mốc đó được đề xuất quà của mốc mới.
+    await summaries.createTier(f.admin, { classId: f.classA.id, minStars: 5, giftId: sticker.id });
+    await db.delete(rewardTiers).where(eq(rewardTiers.minStars, 6));
+    summary = await summaries.getClassSummary(f.admin, f.classA.id);
+    expect(summary.rows.map((r) => r.proposedGift?.name ?? null)).toEqual(["Sticker", "Sticker"]);
+    expect((await summaries.listTiers(f.admin)).map((t) => `${t.classCode}:${t.minStars}`)).toEqual(["A:3", "A:5", "B:1"]);
   });
 
   it("duyệt: chỉ Admin, chỉ sau khi đóng lớp, quà do máy chủ xác định, không duyệt trùng", async () => {

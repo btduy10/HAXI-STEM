@@ -1,4 +1,4 @@
-import { and, asc, between, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, between, desc, eq, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
 import { attendances, classes, courses, enrollments, makeupAssignments, rooms, sessionStudents, sessions, teachers } from "@/db/schema";
@@ -81,10 +81,11 @@ export async function getStudentSchedule(actor: Actor, studentId: string, today:
 
 /**
  * Lịch sử học của một học viên, để giáo viên biết em đã học gì và không dạy trùng chương trình:
- * - `programs`: từng lớp em đã và đang ghi danh, kèm số buổi đã học trên tổng số buổi của khóa.
- *   Đã học = buổi của lớp mà em có mặt (kể cả đi trễ, về sớm) + buổi vắng của lớp đó đã học bù xong;
- *   buổi em học ghép ở lớp khác tính cho lớp em bị vắng, không tính cho lớp nhận.
- * - `lessons`: các bài em đã học xong (buổi em có mặt và giáo viên đã ghi nội dung), mỗi bài của mỗi lớp một dòng.
+ * - `lessons`: các bài em đã học xong (buổi em có mặt và giáo viên đã ghi nội dung). Bài chọn từ Syllabus có tên khóa:
+ *   một bài của một khóa chỉ một dòng dù em học ở lớp nào (kể cả buổi học bù).
+ * - `courses`: mỗi khóa em đã học kèm số buổi đã học trên tổng số buổi của khóa. Đã học = số buổi khác nhau của khóa đó
+ *   mà em có mặt, tính theo bài giáo viên chọn từ Syllabus khi điểm danh; nội dung tự gõ và nhãn cũ không kèm tên khóa
+ *   không thuộc khóa nào. Lớp không gắn với khóa (một lớp học nhiều khóa) nên không đếm theo lớp.
  * - `sessions`: từng buổi đã điểm danh.
  * Người xem được học viên thì xem được lịch sử ở MỌI lớp của em (chỉ ngày, lớp, giáo viên, tên bài, có mặt/vắng);
  * số sao của buổi chỉ có với lớp trong phạm vi của người xem.
@@ -94,41 +95,8 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
   const allowed = await allowedClassIds(actor);
   const inScope = (classId: string) => allowed === null || allowed.includes(classId);
   const attendedIn = sql`${attendances.status} in ('present', 'late', 'left_early')`;
-  const [enrolled, history] = await Promise.all([
-    db
-      .select({
-        classId: classes.id,
-        classCode: classes.code,
-        className: classes.name,
-        courseName: courses.name,
-        totalSessions: courses.totalSessions,
-        leftAt: enrollments.leftAt,
-        status: enrollments.status,
-        classStatus: classes.status,
-        // Buổi của lớp mà em có mặt, không tính buổi em là học viên học bù (buổi đó tính cho lớp bị vắng).
-        attended: sql<number>`(
-          select count(*)::int from attendances a
-          inner join sessions s on s.id = a.session_id
-          where a.student_id = ${enrollments.studentId} and s.class_id = ${classes.id} and s.status <> 'cancelled'
-            and a.status in ('present', 'late', 'left_early')
-            and not exists (select 1 from makeup_assignments m where m.makeup_session_id = s.id and m.student_id = a.student_id)
-        )`,
-        // Buổi vắng của lớp đã học bù xong (có mặt ở buổi học bù).
-        madeUp: sql<number>`(
-          select count(*)::int from makeup_assignments m
-          inner join sessions missed on missed.id = m.absent_session_id
-          inner join sessions held on held.id = m.makeup_session_id
-          inner join attendances a on a.session_id = held.id and a.student_id = m.student_id
-          where m.student_id = ${enrollments.studentId} and missed.class_id = ${classes.id} and held.status <> 'cancelled'
-            and a.status in ('present', 'late', 'left_early')
-        )`,
-      })
-      .from(enrollments)
-      .innerJoin(classes, eq(classes.id, enrollments.classId))
-      .innerJoin(courses, eq(courses.id, classes.courseId))
-      .where(eq(enrollments.studentId, studentId))
-      // Lượt đang hiệu lực trước, rồi lượt mới nhất: em ghi danh lại cùng lớp thì lấy lượt đó.
-      .orderBy(asc(enrollments.status), desc(enrollments.joinedAt), desc(enrollments.createdAt)),
+  const [allCourses, history] = await Promise.all([
+    db.select({ name: courses.name, totalSessions: courses.totalSessions }).from(courses),
     db
       .select({
         sessionId: sessions.id,
@@ -164,37 +132,54 @@ export async function getStudentLearningHistory(actor: Actor, studentId: string)
       .limit(300),
   ]);
 
-  // Mỗi lớp một dòng (em ghi danh lại cùng lớp không sinh thêm dòng).
-  const seenClasses = new Set<string>();
-  const programs = enrolled
-    .filter((e) => !seenClasses.has(e.classId) && seenClasses.add(e.classId))
-    .map(({ attended, madeUp, ...e }) => ({ ...e, learned: attended + madeUp }))
-    .sort((a, b) => a.className.localeCompare(b.className, "vi"));
-
-  // Bài đã học: buổi em có mặt và đã ghi nội dung; cùng một bài ở cùng lớp chỉ lấy lần học đầu tiên.
-  const firstLearned = new Map<string, (typeof history)[number]>();
+  // Bài đã học: buổi em có mặt và đã ghi nội dung; lấy lần học đầu tiên của mỗi bài.
+  const normalize = (name: string) => name.trim().replace(/\s+/g, " ").toLowerCase();
+  const firstLearned = new Map<string, { row: (typeof history)[number]; content: string; lesson: ReturnType<typeof parseLessonLabel> }>();
   for (const row of [...history].reverse()) {
     const content = row.content?.trim();
     if (!row.attended || !content) continue;
-    const key = `${row.classId}|${content}`;
-    if (!firstLearned.has(key)) firstLearned.set(key, row);
+    // `lesson`: bài chọn từ Syllabus (có số buổi, và tên khóa nếu là nhãn mới); null khi giáo viên tự gõ nội dung.
+    const lesson = parseLessonLabel(content);
+    const key = lesson?.courseName ? `course|${normalize(lesson.courseName)}|${lesson.period}` : `class|${row.classId}|${content}`;
+    if (!firstLearned.has(key)) firstLearned.set(key, { row, content, lesson });
   }
   const lessons = [...firstLearned.values()]
-    .map((row) => {
-      const content = row.content!.trim();
-      // `lesson`: bài chọn từ Syllabus (có số tiết); null khi giáo viên tự gõ nội dung.
-      return { sessionId: row.sessionId, classCode: row.classCode, className: row.className, date: row.date, isMakeup: row.isMakeup, content, lesson: parseLessonLabel(content) };
-    })
+    .map(({ row, content, lesson }) => ({
+      sessionId: row.sessionId,
+      classCode: row.classCode,
+      className: row.className,
+      date: row.date,
+      isMakeup: row.isMakeup,
+      content,
+      lesson,
+    }))
+    // Bài có tên khóa đứng trước, theo khóa rồi theo buổi; còn lại theo lớp, số buổi, ngày học.
     .sort(
       (a, b) =>
-        a.className.localeCompare(b.className, "vi") ||
-        (a.lesson?.subjectCode ?? "").localeCompare(b.lesson?.subjectCode ?? "", "vi") ||
+        Number(!a.lesson?.courseName) - Number(!b.lesson?.courseName) ||
+        (a.lesson?.courseName ?? "").localeCompare(b.lesson?.courseName ?? "", "vi") ||
+        (a.lesson?.courseName ? 0 : a.className.localeCompare(b.className, "vi")) ||
         (a.lesson?.period ?? Number.MAX_SAFE_INTEGER) - (b.lesson?.period ?? Number.MAX_SAFE_INTEGER) ||
         a.date.localeCompare(b.date),
     );
 
+  // Số buổi đã học của từng khóa: mỗi (khóa, buổi) đã có đúng một dòng ở trên.
+  const courseOf = new Map(allCourses.map((c) => [normalize(c.name), c]));
+  const learnedOf = new Map<string, { courseName: string; learned: number }>();
+  for (const { lesson } of lessons) {
+    if (!lesson?.courseName) continue;
+    const key = normalize(lesson.courseName);
+    const entry = learnedOf.get(key) ?? { courseName: courseOf.get(key)?.name ?? lesson.courseName, learned: 0 };
+    entry.learned++;
+    learnedOf.set(key, entry);
+  }
+  const progress = [...learnedOf.entries()]
+    // `totalSessions` null: khóa đã đổi tên hoặc đã xóa nên không còn biết tổng số buổi.
+    .map(([key, entry]) => ({ ...entry, totalSessions: courseOf.get(key)?.totalSessions ?? null }))
+    .sort((a, b) => a.courseName.localeCompare(b.courseName, "vi"));
+
   return {
-    programs,
+    courses: progress,
     lessons,
     sessions: history.map(({ classId, makeupAssigned, makeupSessionStatus, makeupAttendance: madeUp, stars, ...row }) => ({
       ...row,

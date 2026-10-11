@@ -163,10 +163,11 @@ async function main() {
         ])
         .returning();
       await tx.insert(s.rewardTiers).values(
-        [c1!.id, c2!.id].flatMap((courseId) => [
-          { courseId, minStars: 10, giftId: sticker!.id },
-          { courseId, minStars: 30, giftId: keychain!.id },
-          { courseId, minStars: 60, giftId: kit!.id },
+        // Mốc quà đặt theo lớp (lớp không gắn với khóa học).
+        [k1!.id, k2!.id].flatMap((classId) => [
+          { classId, minStars: 10, giftId: sticker!.id },
+          { classId, minStars: 30, giftId: keychain!.id },
+          { classId, minStars: 60, giftId: kit!.id },
         ]),
       );
     }

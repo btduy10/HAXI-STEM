@@ -6,7 +6,6 @@ type ClassItem = {
   id: string;
   code: string;
   name: string;
-  courseName: string;
   roomName: string | null;
   startDate: string;
   endDate: string;
@@ -35,8 +34,8 @@ export function ClassList({ classes, basePath }: { classes: ClassItem[]; basePat
               <Badge variant={c.status === "open" ? "secondary" : "outline"}>{LABELS.classStatus[c.status]}</Badge>
             </div>
             <p className="mt-1 text-muted-foreground">
-              {c.courseName}
-              {c.roomName && ` · ${c.roomName}`} · {c.studentCount}/{c.maxSize} học viên
+              {c.roomName && `${c.roomName} · `}
+              {c.studentCount}/{c.maxSize} học viên
             </p>
             <p className="text-muted-foreground">
               {formatDate(c.startDate)} – {formatDate(c.endDate)}

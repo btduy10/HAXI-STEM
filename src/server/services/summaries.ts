@@ -1,11 +1,10 @@
-import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import type { z } from "zod";
 import { db, type DbOrTx } from "@/db";
 import {
   attendances,
   classes,
   courseSummaries,
-  courses,
   enrollments,
   giftHandovers,
   gifts,
@@ -100,9 +99,8 @@ export async function getClassReport(actor: Actor, classId: string) {
   await assertClassAccess(actor, classId);
   if (await isTimetableOnly(classId)) throw notFound("lớp học");
   const [cls] = await db
-    .select({ id: classes.id, code: classes.code, name: classes.name, status: classes.status, courseName: courses.name })
+    .select({ id: classes.id, code: classes.code, name: classes.name, status: classes.status })
     .from(classes)
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .where(eq(classes.id, classId))
     .limit(1);
   if (!cls) throw notFound("lớp học");
@@ -192,23 +190,20 @@ export async function listTiers(actor: Actor) {
       id: rewardTiers.id,
       minStars: rewardTiers.minStars,
       giftName: gifts.name,
-      courseName: courses.name,
       classCode: classes.code,
+      className: classes.name,
     })
     .from(rewardTiers)
     .innerJoin(gifts, eq(gifts.id, rewardTiers.giftId))
-    .leftJoin(courses, eq(courses.id, rewardTiers.courseId))
-    .leftJoin(classes, eq(classes.id, rewardTiers.classId))
-    .orderBy(asc(courses.name), asc(classes.code), asc(rewardTiers.minStars));
+    .innerJoin(classes, eq(classes.id, rewardTiers.classId))
+    .orderBy(asc(classes.code), asc(rewardTiers.minStars));
 }
 export const createTier = (actor: Actor, data: z.output<typeof tierInput>) => createRow(actor, rewardTiers, "reward_tiers", data, "rewards");
 export const deleteTier = (actor: Actor, id: string) => deleteRow(actor, rewardTiers, "reward_tiers", id);
 
-export async function tiersFor(tx: DbOrTx, cls: { id: string; courseId: string }): Promise<RewardTier[]> {
-  return tx
-    .select()
-    .from(rewardTiers)
-    .where(or(eq(rewardTiers.classId, cls.id), and(eq(rewardTiers.courseId, cls.courseId), isNull(rewardTiers.classId))));
+/** Mốc quà của một lớp (mốc quà chỉ đặt theo lớp). */
+export async function tiersFor(tx: DbOrTx, cls: { id: string }): Promise<RewardTier[]> {
+  return tx.select().from(rewardTiers).where(eq(rewardTiers.classId, cls.id));
 }
 
 // ---------- Đề xuất, duyệt và trao quà ----------
@@ -234,9 +229,8 @@ export async function getClassSummary(actor: Actor, classId: string) {
   await assertClassAccess(actor, classId);
   if (await isTimetableOnly(classId)) throw notFound("lớp học");
   const [cls] = await db
-    .select({ id: classes.id, code: classes.code, name: classes.name, status: classes.status, courseId: classes.courseId, courseName: courses.name })
+    .select({ id: classes.id, code: classes.code, name: classes.name, status: classes.status })
     .from(classes)
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .where(eq(classes.id, classId))
     .limit(1);
   if (!cls) throw notFound("lớp học");

@@ -65,7 +65,7 @@ export type RewardTier = { id: string; minStars: number; giftId: string; classId
 
 /**
  * Mốc quà áp dụng cho học viên: mốc cao nhất có min_stars ≤ tổng sao khóa.
- * Nếu lớp có mốc riêng thì chỉ dùng mốc của lớp; nếu không thì dùng mốc của khóa học.
+ * Mốc quà đặt theo lớp: chỉ dùng mốc của chính lớp đó (mốc không gắn lớp là dữ liệu cũ theo khóa học, đã được chép sang từng lớp).
  */
 export function pickTier(totalStars: number, tiers: RewardTier[], classId: string): RewardTier | null {
   const ofClass = tiers.filter((t) => t.classId === classId);

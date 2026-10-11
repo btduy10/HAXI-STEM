@@ -53,9 +53,6 @@ export default async function FeeNoticePage({ searchParams }: PageProps<"/admin/
             <PrintRow label="Lớp">
               {n.classCode} – {n.className}
             </PrintRow>
-            <PrintRow label="Khóa học">
-              {n.courseName} ({n.totalSessions} buổi)
-            </PrintRow>
             <PrintRow label="Thời gian học">
               {formatDate(n.classStart)} – {formatDate(n.classEnd)}
             </PrintRow>

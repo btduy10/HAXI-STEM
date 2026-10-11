@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
-import { account, attendances, auditLogs, classes as classesTable, session, sessions, starLogs, students, teachers, user } from "@/db/schema";
+import { account, attendances, auditLogs, classes as classesTable, session, sessions, starLogs, students, syllabusLessons, teachers, user } from "@/db/schema";
 import type { MailMessage } from "@/server/mailer";
 import { verifyPassword } from "@/server/password";
 import * as accounts from "@/server/services/accounts";
@@ -104,7 +104,12 @@ describe("danh mục và nhật ký", () => {
 
   it("trùng mã báo lỗi CONFLICT, xóa dữ liệu đang dùng bị chặn", async () => {
     await expect(catalog.createTeacher(f.admin, { code: "GVA", fullName: "Trùng", shortName: null, phone: null, email: null, status: "active" })).rejects.toMatchObject({ code: "CONFLICT" });
+    // Khóa học đang có bài Syllabus thì không xóa được. Lớp không còn gắn khóa nên không chặn việc xóa khóa.
+    const [lesson] = await db.insert(syllabusLessons).values({ classId: f.classA.id, courseId: f.course.id, period: 1, title: "Bài 1" }).returning();
     await expect(catalog.deleteCourse(f.admin, f.course.id)).rejects.toMatchObject({ code: "CONFLICT" });
+    await db.delete(syllabusLessons).where(eq(syllabusLessons.id, lesson!.id));
+    await catalog.deleteCourse(f.admin, f.course.id);
+    expect((await db.select().from(classesTable)).map((c) => c.code).sort()).toEqual(["A", "B"]);
   });
 });
 

@@ -101,9 +101,9 @@ export const classes = pgTable(
     id: id(),
     code: text("code").notNull().unique(),
     name: text("name").notNull(),
-    courseId: uuid("course_id")
-      .notNull()
-      .references(() => courses.id),
+    // Lớp không còn gắn với một khóa (một lớp học lần lượt nhiều khóa; khóa chọn ở Syllabus). Cột giữ lại cho dữ liệu cũ,
+    // không còn mã nào đọc hay ghi.
+    courseId: uuid("course_id").references(() => courses.id, { onDelete: "set null" }),
     defaultRoomId: uuid("default_room_id").references(() => rooms.id),
     startDate: date("start_date").notNull(),
     endDate: date("end_date").notNull(),
@@ -204,7 +204,8 @@ export const scheduleTemplates = pgTable(
   ],
 );
 
-// Syllabus: chương trình dạy của từng lớp theo buổi (Buổi + Tên bài/Chủ đề + Sản phẩm). Giáo viên chọn tên bài khi điểm danh.
+// Syllabus: chương trình dạy theo Lớp + Khóa học + Buổi (Tên bài/Chủ đề + Sản phẩm). Một lớp học lần lượt nhiều khóa nên
+// cùng một lớp có Buổi 1 của khóa A và Buổi 1 của khóa B. Giáo viên chọn tên bài khi điểm danh.
 export const syllabusLessons = pgTable(
   "syllabus_lessons",
   {
@@ -212,7 +213,10 @@ export const syllabusLessons = pgTable(
     classId: uuid("class_id")
       .notNull()
       .references(() => classes.id, { onDelete: "cascade" }),
-    // Buổi thứ mấy của lớp (cột "period" giữ tên cũ từ thời còn gọi là Tiết).
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
+    // Buổi thứ mấy của khóa (cột "period" giữ tên cũ từ thời còn gọi là Tiết).
     period: integer("period").notNull(),
     title: text("title").notNull(),
     // Sản phẩm học viên làm ra trong buổi (không bắt buộc).
@@ -221,7 +225,7 @@ export const syllabusLessons = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    uniqueIndex("syllabus_lessons_class_period_uq").on(t.classId, t.period),
+    uniqueIndex("syllabus_lessons_class_course_period_uq").on(t.classId, t.courseId, t.period),
     check("syllabus_lessons_period_chk", sql`${t.period} >= 1`),
   ],
 );
@@ -433,6 +437,8 @@ export const gifts = pgTable("gifts", {
   stock: integer("stock").notNull().default(0),
 });
 
+// Mốc quà đặt theo lớp. Cột course_id là của mốc quà theo khóa học trước đây (đã chép sang từng lớp ở migration 0027),
+// không còn mã nào đọc hay ghi.
 export const rewardTiers = pgTable(
   "reward_tiers",
   {

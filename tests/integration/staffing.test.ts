@@ -1,7 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attendances, classTeachers, rooms, scheduleTemplates, sessions, teachers, timeSlots } from "@/db/schema";
+import { attendances, classTeachers, classes, rooms, scheduleTemplates, sessions, teachers, timeSlots } from "@/db/schema";
 import { assertClassAccess, assertSessionAccess, type Actor } from "@/server/guard";
 import * as classSvc from "@/server/services/classes";
 import * as svc from "@/server/services/sessions";
@@ -47,20 +47,20 @@ const templateInput = (classId: string, extra: Partial<Parameters<typeof svc.cre
 });
 
 describe("lịch mẫu tự sinh và tự cập nhật thời khóa biểu", () => {
-  it("thêm lịch mẫu là tự có buổi từ hôm nay đến hết khóa, kèm trợ giảng; trùng lịch trợ giảng thì bỏ qua và báo lại", async () => {
+  it("thêm lịch mẫu là tự có buổi từ hôm nay đến ngày kết thúc của lớp, kèm trợ giảng; trùng lịch trợ giảng thì bỏ qua và báo lại", async () => {
     const result = await svc.createTemplate(f.admin, templateInput(f.classA.id, { assistantTeacherId: teacherC.id }), now);
     const list = await sessionsOf(f.classA.id);
-    // Khóa 10 buổi, xếp từ hôm nay: Thứ Ba 03/02 → 31/03 mới có 9 buổi nên xếp tiếp 07/04 và lùi ngày kết thúc lớp.
-    expect(result.created).toBe(10);
-    expect(list.at(-1)!.date).toBe("2026-04-07");
+    // Xếp từ hôm nay đến ngày kết thúc của lớp: Thứ Ba 03/02 → 31/03 là 9 buổi; không xếp quá ngày kết thúc.
+    expect(result.created).toBe(9);
+    expect(list.at(-1)!.date).toBe("2026-03-31");
     expect(list.map((s) => s.date)[0]).toBe("2026-02-03");
     expect(list.every((s) => s.teacherId === f.teacherA.id && s.assistantTeacherId === teacherC.id)).toBe(true);
-    expect(result.notices).toEqual(["Đã tự thêm 10 buổi vào Thời khóa biểu."]);
+    expect(result.notices).toEqual(["Đã tự thêm 9 buổi vào Thời khóa biểu."]);
 
-    // Lớp B cùng giờ, khác phòng, nhưng trợ giảng C đang bận ở lớp A → 10 buổi trùng bị bỏ qua, xếp sang các tuần sau.
+    // Lớp B cùng giờ, khác phòng, nhưng trợ giảng C đang bận ở lớp A → cả 9 buổi trùng bị bỏ qua, không xếp sang tuần sau.
     const clash = await svc.createTemplate(f.admin, templateInput(f.classB.id, { roomId: lab2.id, assistantTeacherId: teacherC.id }), now);
-    expect(clash.conflicts).toHaveLength(10);
-    expect((await sessionsOf(f.classB.id))[0]!.date).toBe("2026-04-14");
+    expect(clash.conflicts).toHaveLength(9);
+    expect(await sessionsOf(f.classB.id)).toEqual([]);
     expect(clash.warnings.join(" ")).toContain("Giáo viên đã có buổi A");
   });
 
@@ -72,15 +72,16 @@ describe("lịch mẫu tự sinh và tự cập nhật thời khóa biểu", () 
     await db.update(sessions).set({ roomId: lab2.id }).where(eq(sessions.id, edited!.id)); // sửa tay phòng của buổi 10/02
 
     const result = await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl!.id, timeSlotId: late.id, assistantTeacherId: teacherC.id }, now);
-    expect(result.updated).toBe(9);
+    // 9 buổi (03/02 → 31/03), trừ 1 buổi đã điểm danh.
+    expect(result.updated).toBe(8);
     const after = await sessionsOf(f.classA.id);
     expect(after.find((s) => s.id === attended!.id)).toMatchObject({ startTime: "08:00:00", assistantTeacherId: null });
     expect(after.find((s) => s.id === edited!.id)).toMatchObject({ startTime: "10:00:00", roomId: lab2.id, assistantTeacherId: teacherC.id });
-    expect(after.filter((s) => s.startTime === "10:00:00" && s.roomId === f.room.id)).toHaveLength(8);
+    expect(after.filter((s) => s.startTime === "10:00:00" && s.roomId === f.room.id)).toHaveLength(7);
 
     // Đổi sang Thứ Năm: buổi chưa điểm danh được sinh lại vào Thứ Năm; buổi đã điểm danh giữ nguyên.
     const moved = await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl!.id, weekday: 4, timeSlotId: late.id }, now);
-    expect(moved.created).toBe(9); // 1 buổi đã dạy + 9 Thứ Năm 05/02 … 02/04 = 10 buổi
+    expect(moved.created).toBe(8); // 1 buổi đã dạy + 8 Thứ Năm 05/02 … 26/03
     const days = (await sessionsOf(f.classA.id)).map((s) => s.date);
     expect(days).toContain(attended!.date);
     expect(days.filter((d) => d !== attended!.date).every((d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 4)).toBe(true);
@@ -101,22 +102,25 @@ describe("lịch mẫu tự sinh và tự cập nhật thời khóa biểu", () 
   });
 });
 
-describe("số buổi theo khóa học", () => {
-  it("chỉ xếp đủ số buổi của khóa học; thêm lịch mẫu thứ hai thì các buổi sắp tới tự xếp lại xen kẽ", async () => {
-    // Khóa học của lớp A có 10 buổi; hôm nay 01/02.
+describe("số buổi theo thời gian của lớp", () => {
+  it("xếp buổi cho mọi tuần đến ngày kết thúc của lớp, không giới hạn theo khóa học; thêm lịch mẫu thứ hai thì có thêm buổi của thứ đó", async () => {
+    // Lớp A học đến 31/03; hôm nay 01/02. Khóa học khai 10 buổi không còn là giới hạn của lớp.
     const first = await svc.createTemplate(f.admin, templateInput(f.classA.id), now);
-    expect(first.created).toBe(10); // 9 Thứ Ba đến 31/03, thêm 07/04 cho đủ 10 buổi
-    expect(first.scheduled).toBe(10);
+    expect(first.created).toBe(9); // 9 Thứ Ba từ 03/02 đến 31/03
+    expect(first.scheduled).toBe(9);
+    expect(first).not.toHaveProperty("courseSessions");
     await svc.createTemplate(f.admin, templateInput(f.classA.id, { weekday: 4 }), now);
     const list = await sessionsOf(f.classA.id);
-    expect(list).toHaveLength(10);
-    // Xếp theo thứ tự ngày: Thứ Ba 03/02, Thứ Năm 05/02, … đến đủ 10 buổi.
-    expect(list.map((s) => s.date)).toEqual([
-      "2026-02-03", "2026-02-05", "2026-02-10", "2026-02-12", "2026-02-17",
-      "2026-02-19", "2026-02-24", "2026-02-26", "2026-03-03", "2026-03-05",
-    ]);
-    // Bấm "Sinh buổi" lại không tạo thêm khi đã đủ số buổi.
+    // 9 Thứ Ba + 8 Thứ Năm (05/02 … 26/03), theo thứ tự ngày.
+    expect(list).toHaveLength(17);
+    expect(list.map((s) => s.date).slice(0, 4)).toEqual(["2026-02-03", "2026-02-05", "2026-02-10", "2026-02-12"]);
+    expect(list.at(-1)!.date).toBe("2026-03-31");
+    // Bấm "Sinh buổi" xếp cho cả thời gian của lớp: bổ sung 8 buổi của các tuần trước hôm nay (06/01 … 29/01);
+    // bấm lại không tạo thêm; ngày kết thúc của lớp không đổi.
+    expect((await svc.generateSessions(f.admin, f.classA.id)).created).toBe(8);
+    expect((await sessionsOf(f.classA.id))[0]!.date).toBe("2026-01-06");
     expect((await svc.generateSessions(f.admin, f.classA.id)).created).toBe(0);
+    expect((await db.select().from(classes).where(eq(classes.id, f.classA.id)))[0]!.endDate).toBe("2026-03-31");
   });
 });
 

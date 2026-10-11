@@ -300,7 +300,6 @@ export default async function TimesheetPage({ searchParams }: PageProps<"/admin/
                   <TableHead>Giáo viên</TableHead>
                   <TableHead>Vai trò</TableHead>
                   <TableHead>Lớp</TableHead>
-                  <TableHead>Khóa học</TableHead>
                   <TableHead>Trạng thái</TableHead>
                   <TableHead className="text-right">Mức lương</TableHead>
                   <TableHead className="text-right">Thành tiền</TableHead>
@@ -337,7 +336,6 @@ export default async function TimesheetPage({ searchParams }: PageProps<"/admin/
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell>{r.courseName}</TableCell>
                     <TableCell>
                       <Badge variant={r.state === "taught" ? "default" : r.state === "pending" ? "destructive" : "secondary"}>
                         {STATE_LABEL[r.state]}

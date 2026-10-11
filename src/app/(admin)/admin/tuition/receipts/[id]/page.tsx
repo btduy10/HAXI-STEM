@@ -48,7 +48,6 @@ export default async function ReceiptPage({ params }: PageProps<"/admin/tuition/
           <PrintRow label="Lớp">
             {receipt.classCode} – {receipt.className}
           </PrintRow>
-          <PrintRow label="Khóa học">{receipt.courseName}</PrintRow>
           <PrintRow label="Nội dung">Thu học phí{receipt.note ? ` – ${receipt.note}` : ""}</PrintRow>
           <PrintRow label="Số tiền" strong>
             {formatMoney(receipt.amount)}

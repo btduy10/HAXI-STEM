@@ -32,7 +32,7 @@ async function redeemableTiers(tx: DbOrTx, actor: Actor, studentId: string) {
   const allowed = await allowedClassIds(actor, tx);
   if (allowed && allowed.length === 0) return [];
   const active = await tx
-    .select({ id: classes.id, code: classes.code, courseId: classes.courseId })
+    .select({ id: classes.id, code: classes.code })
     .from(enrollments)
     .innerJoin(classes, eq(classes.id, enrollments.classId))
     .where(
@@ -45,15 +45,9 @@ async function redeemableTiers(tx: DbOrTx, actor: Actor, studentId: string) {
     )
     .orderBy(asc(classes.code));
   const out: { tierId: string; classId: string; classCode: string; giftId: string; minStars: number }[] = [];
-  const seen = new Set<string>();
+  // Mốc quà đặt theo lớp: mỗi lớp em đang học dùng mốc của chính lớp đó.
   for (const cls of active) {
-    const all = await tiersFor(tx, cls);
-    // Cùng quy tắc với tổng kết cuối khóa: lớp có mốc riêng thì không dùng mốc của khóa.
-    const own = all.filter((t) => t.classId === cls.id);
-    for (const tier of own.length > 0 ? own : all) {
-      // Mốc theo khóa có thể áp cho nhiều lớp của em: chỉ liệt kê một lần.
-      if (seen.has(tier.id)) continue;
-      seen.add(tier.id);
+    for (const tier of await tiersFor(tx, cls)) {
       out.push({ tierId: tier.id, classId: cls.id, classCode: cls.code, giftId: tier.giftId, minStars: tier.minStars });
     }
   }

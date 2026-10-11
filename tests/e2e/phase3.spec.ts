@@ -133,13 +133,13 @@ test("GV không ghi sao, không xem hồ sơ của học viên lớp khác; tran
   await expectNoHorizontalScroll(page);
 });
 
-test("Admin: trang Sao chỉ còn Tiêu chí và Sổ cái; hồ sơ học viên không còn Avatar; menu Lớp học → Ghi danh → QL Học viên", async ({ page }) => {
+test("Admin: trang Sao chỉ còn Tiêu chí và Sổ cái; hồ sơ học viên không còn Avatar; menu Lớp học → Syllabus → Ghi danh → QL Học viên", async ({ page }) => {
   await login(page, "admin", NEW_PASSWORD);
   await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
   await page.getByRole("button", { name: "Xác nhận" }).click();
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 
-  // Thứ tự menu: Lớp học, Ghi danh, QL Học viên đứng liền nhau theo đúng thứ tự đó.
+  // Thứ tự menu: Lớp học, Syllabus, Ghi danh, QL Học viên đứng liền nhau theo đúng thứ tự đó.
   const menu = page.getByRole("dialog");
   await expect(async () => {
     await page.getByRole("button", { name: "Mở menu" }).click();
@@ -148,7 +148,7 @@ test("Admin: trang Sao chỉ còn Tiêu chí và Sổ cái; hồ sơ học viên
   const labels = (await menu.getByRole("link").allTextContents()).map((label) => label.trim());
   const at = (name: string) => labels.indexOf(name);
   expect(at("Lớp học")).toBeGreaterThan(-1);
-  expect([at("Ghi danh") - at("Lớp học"), at("QL Học viên") - at("Ghi danh")]).toEqual([1, 1]);
+  expect([at("Syllabus") - at("Lớp học"), at("Ghi danh") - at("Syllabus"), at("QL Học viên") - at("Ghi danh")]).toEqual([1, 1, 1]);
   expect(labels.filter((label) => /avatar/i.test(label))).toEqual([]);
   await page.keyboard.press("Escape");
 

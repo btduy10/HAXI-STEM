@@ -91,8 +91,8 @@ export const syllabusEdit = z.object({
   title: reqText(200),
   product: optText(200),
 });
-/** Thêm một bài vào Syllabus của lớp. Khóa học chọn trên form chỉ để lọc lớp, máy chủ lấy khóa theo lớp. */
-export const syllabusInput = syllabusEdit.extend({ classId: id });
+/** Thêm một bài vào Syllabus: chọn lớp (menu Lớp học) và khóa học (menu Khóa học). */
+export const syllabusInput = syllabusEdit.extend({ classId: id, courseId: id });
 
 export const TIMESHEET_ROLES = ["main", "substitute", "assistant"] as const;
 /** Công bổ sung: dòng công ghi tay của giáo viên ở bảng Chấm công. */
@@ -130,11 +130,10 @@ export const holidayInput = z.object({
   classId: optId,
 });
 
+/** Lớp học: mã lớp do máy chủ tự cấp (RB + năm + số thứ tự) nên không có trong form; lớp không gắn với khóa học. */
 export const classInput = z
   .object({
-    code: freeCode,
     name: reqText(100),
-    courseId: id,
     defaultRoomId: optId,
     startDate: isoDate,
     endDate: isoDate,

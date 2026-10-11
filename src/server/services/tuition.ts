@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "@/db";
-import { appSettings, classes, courses, enrollments, students, tuitionReceipts, user } from "@/db/schema";
+import { appSettings, classes, enrollments, students, tuitionReceipts, user } from "@/db/schema";
 import { type TuitionStatus, receiptCode, tuitionBalance } from "@/domain/tuition";
 import type { centerInfoInput } from "@/lib/validation/rewards";
 import type { cancelReceiptInput, classFeeInput, discountInput, receiptInput } from "@/lib/validation/tuition";
@@ -55,8 +55,6 @@ export async function tuitionRows(allowed: string[] | null, filters: TuitionFilt
       className: classes.name,
       classStart: classes.startDate,
       classEnd: classes.endDate,
-      courseName: courses.name,
-      totalSessions: courses.totalSessions,
       fee: classes.tuitionFee,
       discount: enrollments.feeDiscount,
       discountReason: enrollments.feeDiscountReason,
@@ -65,7 +63,6 @@ export async function tuitionRows(allowed: string[] | null, filters: TuitionFilt
     .from(enrollments)
     .innerJoin(students, eq(students.id, enrollments.studentId))
     .innerJoin(classes, eq(classes.id, enrollments.classId))
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .leftJoin(paidByEnrollment, eq(paidByEnrollment.enrollmentId, enrollments.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(asc(classes.code), asc(students.code));
@@ -232,7 +229,6 @@ const receiptSelection = {
   classId: classes.id,
   classCode: classes.code,
   className: classes.name,
-  courseName: courses.name,
 };
 const receiptBase = () =>
   db
@@ -241,7 +237,6 @@ const receiptBase = () =>
     .innerJoin(enrollments, eq(enrollments.id, tuitionReceipts.enrollmentId))
     .innerJoin(students, eq(students.id, enrollments.studentId))
     .innerJoin(classes, eq(classes.id, enrollments.classId))
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .leftJoin(user, eq(user.id, tuitionReceipts.collectedBy));
 
 /** Phiếu thu đã lập (mới nhất trước), trong phạm vi lớp của người xem. */

@@ -18,7 +18,6 @@ import {
   updateGiftAction,
 } from "@/server/actions/rewards";
 import type { Actor } from "@/server/guard";
-import { listCourses } from "@/server/services/catalog";
 import { listClasses } from "@/server/services/classes";
 import { getClassReport, getClassSummary, listGifts, listTiers } from "@/server/services/summaries";
 import { requireMenu } from "@/server/session";
@@ -92,15 +91,14 @@ async function GiftsTab({ actor, perm }: { actor: Actor; perm: Perm }) {
 }
 
 async function TiersTab({ actor, perm }: { actor: Actor; perm: Perm }) {
-  const [tiers, gifts, courses, classes] = await Promise.all([listTiers(actor), listGifts(actor), listCourses(actor), listClasses(actor)]);
+  const [tiers, gifts, classes] = await Promise.all([listTiers(actor), listGifts(actor), listClasses(actor)]);
   const fields: Field[] = [
-    { name: "courseId", label: "Áp dụng cho khóa học", type: "select", options: courses.map((c) => ({ value: c.id, label: c.name })) },
     {
       name: "classId",
-      label: "…hoặc riêng cho lớp",
+      label: "Lớp",
       type: "select",
+      required: true,
       options: classes.map((c) => ({ value: c.id, label: `${c.code} – ${c.name}` })),
-      hint: "Chọn đúng một trong hai. Lớp có mốc riêng thì không dùng mốc của khóa học.",
     },
     { name: "minStars", label: "Từ số sao của khóa", type: "number", required: true },
     { name: "giftId", label: "Quà", type: "select", required: true, options: gifts.map((g) => ({ value: g.id, label: g.name })) },
@@ -112,10 +110,10 @@ async function TiersTab({ actor, perm }: { actor: Actor; perm: Perm }) {
       </p>
       <CrudSection
         title="Mốc quà"
-        columns={["Phạm vi", "Từ số sao", "Quà"]}
+        columns={["Lớp", "Từ số sao", "Quà"]}
         rows={tiers.map((t) => ({
           id: t.id,
-          cells: [t.classCode ? `Lớp ${t.classCode}` : `Khóa ${t.courseName ?? ""}`, String(t.minStars), t.giftName],
+          cells: [`${t.classCode} – ${t.className}`, String(t.minStars), t.giftName],
           values: {},
         }))}
         fields={fields}

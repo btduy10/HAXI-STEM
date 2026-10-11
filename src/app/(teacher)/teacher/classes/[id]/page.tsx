@@ -28,8 +28,8 @@ export default async function TeacherClassPage({ params }: PageProps<"/teacher/c
           <Badge variant={cls.status === "open" ? "secondary" : "outline"}>{LABELS.classStatus[cls.status]}</Badge>
         </div>
         <p className="text-sm text-muted-foreground">
-          {cls.courseName}
-          {cls.roomName && ` · ${cls.roomName}`} · {formatDate(cls.startDate)} – {formatDate(cls.endDate)}
+          {cls.roomName && `${cls.roomName} · `}
+          {formatDate(cls.startDate)} – {formatDate(cls.endDate)}
         </p>
         <p className="text-sm text-muted-foreground">
           Giáo viên: {teachers.map((t) => `${t.fullName} (${LABELS.classTeacherRole[t.role]})`).join(", ")}

@@ -12,7 +12,7 @@ export default async function ImportSyllabusPage() {
   return (
     <ExcelImportForm
       kind="syllabus"
-      note="Năm cột: Khóa học (tên khóa), Lớp học (mã lớp ở menu Lớp học), Buổi, Tên bài/Chủ đề, Sản phẩm (để trống được). Chỉ nhập được vào lớp trong phạm vi của bạn. Bài đã có cùng Lớp học + Buổi sẽ được cập nhật tên bài và sản phẩm."
+      note="Năm cột: Khóa học (tên khóa ở menu Khóa học), Lớp học (tên lớp, hoặc mã lớp nếu có hai lớp trùng tên), Buổi, Tên bài/Chủ đề, Sản phẩm (để trống được). Chỉ nhập được vào lớp trong phạm vi của bạn. Bài đã có cùng Lớp học + Khóa học + Buổi sẽ được cập nhật tên bài và sản phẩm."
     />
   );
 }

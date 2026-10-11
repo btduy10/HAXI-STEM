@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { id, intIn, optId, optText, reqText } from "./common";
+import { id, intIn, optText, reqText } from "./common";
 
 export const giftInput = z.object({
   name: reqText(100),
@@ -8,17 +8,12 @@ export const giftInput = z.object({
 });
 export const giftUpdate = z.object({ id, data: giftInput });
 
-export const tierInput = z
-  .object({
-    courseId: optId,
-    classId: optId,
-    minStars: intIn(0, 100000),
-    giftId: id,
-  })
-  .refine((v) => Boolean(v.courseId) !== Boolean(v.classId), {
-    path: ["classId"],
-    message: "Chọn đúng một phạm vi: khóa học hoặc lớp",
-  });
+/** Mốc quà đặt theo lớp. */
+export const tierInput = z.object({
+  classId: id,
+  minStars: intIn(0, 100000),
+  giftId: id,
+});
 
 export const classIdOnly = z.object({ classId: id });
 export const approveInput = z.object({ classId: id, summaryIds: z.array(id).min(1, "Chọn ít nhất một học viên").max(500) });

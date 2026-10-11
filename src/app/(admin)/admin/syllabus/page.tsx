@@ -5,6 +5,7 @@ import type { Field } from "@/components/form-dialog";
 import { LinkButton } from "@/components/link-button";
 import { LABELS } from "@/lib/format";
 import { createSyllabusLessonAction, deleteSyllabusLessonAction, updateSyllabusLessonAction } from "@/server/actions/admin";
+import { listCourses } from "@/server/services/catalog";
 import { listClasses } from "@/server/services/classes";
 import { listSyllabus } from "@/server/services/syllabus";
 import { requireMenu } from "@/server/session";
@@ -13,38 +14,22 @@ export const metadata: Metadata = { title: "Syllabus" };
 
 export default async function SyllabusPage({ searchParams }: PageProps<"/admin/syllabus">) {
   const { actor, can } = await requireMenu("syllabus");
-  const classes = await listClasses(actor);
+  // Lớp chọn từ menu Lớp học (trong phạm vi của người xem), khóa chọn từ menu Khóa học; hai ô độc lập vì một lớp học nhiều khóa.
+  const [classes, courses] = await Promise.all([listClasses(actor), listCourses(actor)]);
+  const byName = [...classes].sort((a, b) => a.name.localeCompare(b.name, "vi") || a.code.localeCompare(b.code, "vi"));
   const params = await searchParams;
   const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
-  // Khóa học của các lớp trong phạm vi người xem, theo tên.
-  const courses = [...new Map(classes.map((c) => [c.courseId, { id: c.courseId, name: c.courseName }])).values()].sort((a, b) => a.name.localeCompare(b.name, "vi"));
-  // Chỉ nhận khóa và lớp có trong danh sách (tránh truy vấn với giá trị tùy ý); lớp phải thuộc khóa đang lọc.
+  // Chỉ nhận khóa và lớp có trong danh sách (tránh truy vấn với giá trị tùy ý).
   const course = courses.find((c) => c.id === first(params.courseId)) ?? null;
-  const shown = course ? classes.filter((c) => c.courseId === course.id) : classes;
-  const current = shown.find((c) => c.id === first(params.classId)) ?? null;
+  const current = classes.find((c) => c.id === first(params.classId)) ?? null;
   const lessons = await listSyllabus(actor, { courseId: course?.id, classId: current?.id });
 
-  const period: Field = { name: "period", label: "Buổi", type: "number", required: true, hint: "Buổi thứ mấy của lớp (1, 2, 3…)." };
+  const period: Field = { name: "period", label: "Buổi", type: "number", required: true, hint: "Buổi thứ mấy của khóa học (1, 2, 3…)." };
   const title: Field = { name: "title", label: "Tên bài/Chủ đề", required: true, hint: "Giáo viên chọn tên bài này khi điểm danh; hồ sơ học viên hiện bài em đã học." };
   const product: Field = { name: "product", label: "Sản phẩm", hint: "Sản phẩm học viên làm ra trong buổi (để trống được)." };
   const fields: Field[] = [
-    {
-      name: "courseId",
-      label: "Khóa học",
-      type: "select",
-      required: true,
-      defaultValue: (current?.courseId ?? course?.id) || undefined,
-      options: courses.map((c) => ({ value: c.id, label: c.name })),
-    },
-    {
-      name: "classId",
-      label: "Lớp học",
-      type: "select",
-      required: true,
-      filterBy: "courseId",
-      defaultValue: current?.id,
-      options: classes.map((c) => ({ value: c.id, label: `${c.code} – ${c.name}`, group: c.courseId })),
-    },
+    { name: "classId", label: "Lớp học", type: "select", required: true, defaultValue: current?.id, options: byName.map((c) => ({ value: c.id, label: c.name })) },
+    { name: "courseId", label: "Khóa học", type: "select", required: true, defaultValue: course?.id, options: courses.map((c) => ({ value: c.id, label: c.name })) },
     period,
     title,
     product,
@@ -70,9 +55,9 @@ export default async function SyllabusPage({ searchParams }: PageProps<"/admin/s
             Lớp học
             <AutoSubmitSelect name="classId" defaultValue={current?.id ?? ""}>
               <option value="">Tất cả lớp</option>
-              {shown.map((c) => (
+              {byName.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.code} – {c.name} ({LABELS.classStatus[c.status]})
+                  {c.name} ({LABELS.classStatus[c.status]})
                 </option>
               ))}
             </AutoSubmitSelect>
@@ -98,12 +83,12 @@ export default async function SyllabusPage({ searchParams }: PageProps<"/admin/s
         emptyText="Chưa có bài học nào. Thêm từng bài hoặc nhập từ Excel."
         rows={lessons.map((l) => ({
           id: l.id,
-          label: `${l.classCode} · Buổi ${l.period}`,
-          cells: [l.courseName, `${l.classCode} – ${l.className}`, String(l.period), l.title, l.product ?? ""],
+          label: `${l.className} · ${l.courseName} · Buổi ${l.period}`,
+          cells: [l.courseName, l.className, String(l.period), l.title, l.product ?? ""],
           values: { period: String(l.period), title: l.title, product: l.product ?? "" },
         }))}
         fields={fields}
-        // Sửa: đổi buổi, tên bài, sản phẩm; khóa và lớp của bài giữ nguyên.
+        // Sửa: đổi buổi, tên bài, sản phẩm; lớp và khóa học của bài giữ nguyên.
         editFields={[period, title, product]}
         createAction={can("add") ? createSyllabusLessonAction : undefined}
         updateAction={can("edit") ? updateSyllabusLessonAction : undefined}

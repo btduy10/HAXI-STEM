@@ -375,14 +375,19 @@ describe("học bù bằng cách học ghép vào buổi có sẵn", () => {
 
 describe("QL Học viên: số buổi đã học, chương trình học, lịch sử buổi học, tích lũy sao", () => {
   const progress = async (studentId: string, actor: Actor = f.admin) =>
-    (await historySvc.getStudentLearningHistory(actor, studentId)).programs.map((p) => `${p.classCode}|${p.learned}/${p.totalSessions}`);
+    (await historySvc.getStudentLearningHistory(actor, studentId)).courses.map((c) => `${c.courseName}|${c.learned}/${c.totalSessions}`);
+  /** Buổi đã dạy của một lớp với nội dung cho trước. */
+  const taught = async (classId: string, teacherId: string, rows: [date: string, content: string][]) =>
+    db
+      .insert(sessions)
+      .values(rows.map(([date, content]) => ({ classId, date, startTime: "18:00", endTime: "19:30", teacherId, status: "done" as const, content })))
+      .returning();
 
   it("lịch sử gồm mọi lớp em từng học kèm tên bài; sao của buổi chỉ có với lớp trong phạm vi người xem", async () => {
     await starSvc.awardStars(f.admin, { sessionId: absent.id, criteriaId: plusThree, studentIds: [a2()], note: null }, NOW);
     const mine = await historySvc.getStudentLearningHistory(f.actorA, a2());
-    expect(mine.programs).toEqual([
-      expect.objectContaining({ classCode: "A", className: f.classA.name, courseName: "Robotics", totalSessions: 10, learned: 1, status: "active", leftAt: null }),
-    ]);
+    // Nội dung buổi này giáo viên tự gõ nên không thuộc khóa nào.
+    expect(mine.courses).toEqual([]);
     expect(mine.sessions).toEqual([
       expect.objectContaining({
         date: "2026-01-06",
@@ -409,8 +414,7 @@ describe("QL Học viên: số buổi đã học, chương trình học, lịch 
     await recordTarget("present");
 
     const seen = await historySvc.getStudentLearningHistory(f.actorB, a1());
-    // Buổi vắng của lớp A đã học bù xong nên tính 1 buổi cho lớp A; em không ghi danh lớp B nên không có dòng lớp B.
-    expect(seen.programs.map((p) => `${p.classCode}|${p.learned}/${p.totalSessions}`)).toEqual(["A|1/10"]);
+    expect(seen.courses).toEqual([]);
     expect(seen.sessions).toEqual([
       expect.objectContaining({ date: "2026-01-15", classCode: "B", teacherName: f.teacherB.shortName || f.teacherB.fullName, status: "present", isMakeup: true, stars: 0 }),
       expect.objectContaining({ date: "2026-01-06", classCode: "A", status: "excused", isMakeup: false, makeup: "done", stars: null }),
@@ -421,65 +425,80 @@ describe("QL Học viên: số buổi đã học, chương trình học, lịch 
     expect((await historySvc.getStudentLearningHistory(f.admin, a1())).sessions[1]!.stars).toBe(3);
   });
 
-  it("đã học = buổi có mặt + buổi vắng đã học bù xong, trên tổng số buổi của Khóa học", async () => {
-    // A1 vắng có phép buổi 06/01: chưa học buổi nào. Xếp bù chưa đủ, phải có mặt ở buổi học bù.
-    expect(await progress(a1())).toEqual(["A|0/10"]);
+  it("đã học theo từng khóa: số buổi khác nhau của khóa em có mặt, kể cả học bù ở lớp khác, trên Tổng số buổi của khóa", async () => {
+    const [second] = await db.insert(courses).values({ name: "Robotics 2", totalSessions: 12 }).returning();
+    // Buổi 06/01 của lớp A dạy Buổi 1 của khóa Robotics: A2 có mặt, A1 vắng có phép.
+    await db.update(sessions).set({ content: "Robotics · Buổi 1 – Làm quen" }).where(eq(sessions.id, absent.id));
+    expect(await progress(a2())).toEqual(["Robotics|1/10"]);
+    expect(await progress(a1())).toEqual([]);
+    // A1 học bù ở lớp B, hôm đó lớp B cũng dạy Buổi 1 của khóa Robotics: xếp bù chưa đủ, có mặt mới tính cho khóa.
     await assign(target.id);
-    expect(await progress(a1())).toEqual(["A|0/10"]);
+    expect(await progress(a1())).toEqual([]);
     await recordTarget("present");
-    expect(await progress(a1())).toEqual(["A|1/10"]);
-    // Học viên của lớp B có mặt buổi đó: tính cho lớp B; em học ghép không được tính thêm vào lớp B.
-    expect(await progress(f.students[2]!.id)).toEqual(["B|1/10"]);
+    await db.update(sessions).set({ content: "robotics · Buổi 1 – Làm quen" }).where(eq(sessions.id, target.id));
+    expect(await progress(a1())).toEqual(["Robotics|1/10"]);
 
-    // Lớp A dạy thêm: đi trễ, về sớm đều tính; vắng không phép và buổi đã hủy không tính.
-    const [late, early, missed, cancelled] = await db
-      .insert(sessions)
-      .values(
-        ["2026-01-08", "2026-01-09", "2026-01-10", "2026-01-11"].map((date) => ({ classId: f.classA.id, date, startTime: "18:00", endTime: "19:30", teacherId: f.teacherA.id, status: "done" as const })),
-      )
-      .returning();
-    await db.insert(attendances).values([
-      { sessionId: late!.id, studentId: a2(), status: "late" },
-      { sessionId: early!.id, studentId: a2(), status: "left_early" },
-      { sessionId: missed!.id, studentId: a2(), status: "absent" },
-      { sessionId: cancelled!.id, studentId: a2(), status: "present" },
+    // Lớp A dạy tiếp, rồi học sang khóa Robotics 2 (một lớp học nhiều khóa).
+    const made = await taught(f.classA.id, f.teacherA.id, [
+      ["2026-01-07", "Robotics · Buổi 2 – Lắp ráp"], // đi trễ: tính
+      ["2026-01-08", "Robotics · Buổi 2 – Lắp ráp"], // học lại cùng buổi: không tính hai lần
+      ["2026-01-09", "Robotics · Buổi 3 – Động cơ"], // vắng: không tính
+      ["2026-01-10", "Robotics · Buổi 4 – Cảm biến"], // buổi đã hủy: không tính
+      ["2026-01-11", "Ôn tập"], // nội dung tự gõ: không thuộc khóa nào
+      ["2026-01-12", "Buổi 5 – Nhãn cũ không kèm tên khóa"], // không thuộc khóa nào
+      ["2026-01-14", "Robotics 2 · Buổi 1 – Tránh vật cản"],
     ]);
-    await db.update(sessions).set({ status: "cancelled" }).where(eq(sessions.id, cancelled!.id));
-    expect(await progress(a2())).toEqual(["A|3/10"]);
+    const statuses = ["late", "left_early", "absent", "present", "present", "present", "present"] as const;
+    await db.insert(attendances).values(made.map((session, i) => ({ sessionId: session.id, studentId: a2(), status: statuses[i]! })));
+    await db.update(sessions).set({ status: "cancelled" }).where(eq(sessions.id, made[3]!.id));
+    expect(await progress(a2())).toEqual(["Robotics|2/10", "Robotics 2|1/12"]);
 
-    // Mẫu số theo "Tổng số buổi" của Khóa học; em rời lớp vẫn có dòng của lớp đó kèm ngày rời.
-    await db.update(courses).set({ totalSessions: 12 });
-    expect(await progress(a2())).toEqual(["A|3/12"]);
+    // Mẫu số là "Tổng số buổi" của khóa; khóa đã đổi tên thì không còn biết tổng số buổi.
+    await db.update(courses).set({ totalSessions: 15 }).where(eq(courses.id, f.course.id));
+    await db.update(courses).set({ name: "Robotics nâng cao" }).where(eq(courses.id, second!.id));
+    expect((await historySvc.getStudentLearningHistory(f.admin, a2())).courses).toEqual([
+      { courseName: "Robotics", learned: 2, totalSessions: 15 },
+      { courseName: "Robotics 2", learned: 1, totalSessions: null },
+    ]);
+    // Rời lớp không làm mất số buổi đã học; em chưa học gì thì không có dòng nào.
     const [enrollment] = await db.select().from(enrollments).where(eq(enrollments.studentId, a2()));
     await classSvc.leaveEnrollment(f.admin, { id: enrollment!.id, leftAt: TODAY });
-    expect((await historySvc.getStudentLearningHistory(f.admin, a2())).programs).toEqual([
-      expect.objectContaining({ classCode: "A", learned: 3, totalSessions: 12, status: "left", leftAt: TODAY }),
-    ]);
-    // Ghi danh lại cùng lớp: vẫn một dòng, theo lượt đang hiệu lực.
-    await classSvc.enrollStudent(f.admin, { classId: f.classA.id, studentId: a2(), joinedAt: TODAY });
-    expect((await historySvc.getStudentLearningHistory(f.admin, a2())).programs).toEqual([expect.objectContaining({ classCode: "A", learned: 3, status: "active", leftAt: null })]);
+    expect(await progress(a2())).toEqual(["Robotics|2/15", "Robotics 2|1/null"]);
     expect(await progress(f.students[4]!.id)).toEqual([]);
+    // Giáo viên của em thấy đủ, kể cả khóa em học ở lớp khác.
+    expect(await progress(a1(), f.actorA)).toEqual(["Robotics|1/15"]);
   });
 
-  it("chương trình học: mỗi bài em đã học xong một dòng, số bài theo Tiết của Syllabus; học hai lần chỉ một dòng", async () => {
+  it("chương trình học: mỗi bài em đã học xong một dòng, kèm tên khóa và số bài theo Buổi của Syllabus; một bài của một khóa chỉ một dòng dù học ở lớp nào", async () => {
     const titles = async (studentId: string) => (await historySvc.getStudentLearningHistory(f.admin, studentId)).lessons.map((l) => `${l.date} ${lessonTitle(l.content)}`);
-    await db.update(sessions).set({ content: "Tiết 3 – Động cơ" }).where(eq(sessions.id, absent.id));
-    const contents = ["Tiết 1 – Làm quen với robot", "Tiết 3 – Động cơ", "Tiết 4 – Cảm biến", "  ", "Ôn tập"];
-    const made = await db
-      .insert(sessions)
-      .values(contents.map((content, i) => ({ classId: f.classA.id, date: `2026-01-${String(7 + i).padStart(2, "0")}`, startTime: "18:00", endTime: "19:30", teacherId: f.teacherA.id, status: "done" as const, content })))
-      .returning();
-    await db.insert(attendances).values([
-      { sessionId: made[0]!.id, studentId: a2(), status: "late" },
-      { sessionId: made[1]!.id, studentId: a2(), status: "present" }, // học lại Tiết 3
-      { sessionId: made[2]!.id, studentId: a2(), status: "absent" }, // vắng: chưa học Tiết 4
-      { sessionId: made[3]!.id, studentId: a2(), status: "present" }, // buổi chưa ghi nội dung
-      { sessionId: made[4]!.id, studentId: a2(), status: "present" }, // nội dung tự gõ
+    await db.update(sessions).set({ content: "Robotics · Buổi 3 – Động cơ" }).where(eq(sessions.id, absent.id));
+    const made = await taught(f.classA.id, f.teacherA.id, [
+      ["2026-01-07", "Robotics · Buổi 1 – Làm quen với robot"],
+      ["2026-01-08", "Robotics · Buổi 3 – Động cơ"], // học lại Buổi 3
+      ["2026-01-09", "Robotics · Buổi 4 – Cảm biến"], // vắng: chưa học Buổi 4
+      ["2026-01-10", "  "], // buổi chưa ghi nội dung
+      ["2026-01-11", "Ôn tập"], // nội dung tự gõ
+      ["2026-01-12", "Tiết 2 – Nhãn cũ"], // nhãn cũ không kèm tên khóa
+      ["2026-01-13", "Robotics 2 · Buổi 1 – Tránh vật cản"],
     ]);
-    // Theo số bài; bài học hai lần lấy ngày học đầu tiên; nội dung tự gõ đứng sau các bài có số.
-    expect(await titles(a2())).toEqual(["2026-01-07 Bài 1: Làm quen với robot", "2026-01-06 Bài 3: Động cơ", "2026-01-11 Ôn tập"]);
+    const statuses = ["late", "present", "absent", "present", "present", "present", "present"] as const;
+    await db.insert(attendances).values(made.map((session, i) => ({ sessionId: session.id, studentId: a2(), status: statuses[i]! })));
+    // Bài có tên khóa đứng trước, theo khóa rồi theo số bài; bài học hai lần lấy ngày học đầu tiên; sau đó là nhãn cũ và nội dung tự gõ.
+    const expected = [
+      "2026-01-07 Robotics · Bài 1: Làm quen với robot",
+      "2026-01-06 Robotics · Bài 3: Động cơ",
+      "2026-01-13 Robotics 2 · Bài 1: Tránh vật cản",
+      "2026-01-12 Bài 2: Nhãn cũ",
+      "2026-01-11 Ôn tập",
+    ];
+    expect(await titles(a2())).toEqual(expected);
     const [first] = (await historySvc.getStudentLearningHistory(f.admin, a2())).lessons;
-    expect(first).toMatchObject({ classCode: "A", className: f.classA.name, isMakeup: false, lesson: { subjectCode: null, period: 1, title: "Làm quen với robot" } });
+    expect(first).toMatchObject({ classCode: "A", className: f.classA.name, isMakeup: false, lesson: { courseName: "Robotics", period: 1, title: "Làm quen với robot" } });
+
+    // Học lại Buổi 1 của khóa Robotics ở lớp B: vẫn một dòng cho bài đó.
+    const [again] = await taught(f.classB.id, f.teacherB.id, [["2026-01-14", "Robotics · Buổi 1 – Làm quen với robot"]]);
+    await db.insert(attendances).values({ sessionId: again!.id, studentId: a2(), status: "present" });
+    expect(await titles(a2())).toEqual(expected);
     // A1 vắng buổi 06/01 nên chưa có bài nào.
     expect(await titles(a1())).toEqual([]);
   });

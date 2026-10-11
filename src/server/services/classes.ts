@@ -1,4 +1,4 @@
-import { and, asc, between, count, desc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, between, count, desc, eq, gte, inArray, like, lt, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { z } from "zod";
 import { db, type Tx } from "@/db";
@@ -7,7 +7,6 @@ import {
   classTeachers,
   classes,
   courseSummaries,
-  courses,
   enrollments,
   rooms,
   scheduleTemplates,
@@ -22,6 +21,7 @@ import {
   timesheetEntries,
   tuitionReceipts,
 } from "@/db/schema";
+import { classCodeYearPrefix, nextClassCode } from "@/domain/student-code";
 import { ROSTER_NO_TEACHER_SHADE, rosterSessionLabel, rosterSessionOrder, rosterTeacherShade, shiftOfTime } from "@/domain/roster";
 import { addDays, isoWeekday, startOfWeek } from "@/lib/dates";
 import { todayIso } from "@/lib/format";
@@ -50,8 +50,6 @@ export async function listClasses(actor: Actor, { includeTimetableOnly = false }
       id: classes.id,
       code: classes.code,
       name: classes.name,
-      courseId: classes.courseId,
-      courseName: courses.name,
       defaultRoomId: classes.defaultRoomId,
       roomName: rooms.name,
       startDate: classes.startDate,
@@ -62,7 +60,6 @@ export async function listClasses(actor: Actor, { includeTimetableOnly = false }
       studentCount: activeCount,
     })
     .from(classes)
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .leftJoin(rooms, eq(rooms.id, classes.defaultRoomId))
     .where(and(allowed ? inArray(classes.id, allowed) : undefined, includeTimetableOnly ? undefined : eq(classes.timetableOnly, false)))
     // Khóa bắt đầu trước xếp trước; cùng ngày thì theo mã lớp.
@@ -76,8 +73,6 @@ export async function getClass(actor: Actor, classId: string) {
       id: classes.id,
       code: classes.code,
       name: classes.name,
-      courseId: classes.courseId,
-      courseName: courses.name,
       defaultRoomId: classes.defaultRoomId,
       roomName: rooms.name,
       startDate: classes.startDate,
@@ -87,7 +82,6 @@ export async function getClass(actor: Actor, classId: string) {
       timetableOnly: classes.timetableOnly,
     })
     .from(classes)
-    .innerJoin(courses, eq(courses.id, classes.courseId))
     .leftJoin(rooms, eq(rooms.id, classes.defaultRoomId))
     .where(eq(classes.id, classId))
     .limit(1);
@@ -95,8 +89,28 @@ export async function getClass(actor: Actor, classId: string) {
   return row;
 }
 
-export const createClass = (actor: Actor, data: z.output<typeof classInput>) =>
-  createRow(actor, classes, "classes", data, "classes");
+/** Mã lớp tự cấp kế tiếp của năm hiện tại (RB2601, RB2602, …). */
+async function nextCodeOf(tx: Tx, now: Date): Promise<string> {
+  const year = Number(todayIso(now).slice(0, 4));
+  const rows = await tx.select({ code: classes.code }).from(classes).where(like(classes.code, `${classCodeYearPrefix(year)}%`));
+  return nextClassCode(rows.map((r) => r.code), year);
+}
+
+/** Thêm lớp: mã lớp luôn do máy chủ cấp (mã kế tiếp của năm), không nhận từ form và không sửa được về sau. */
+export async function createClass(actor: Actor, data: z.output<typeof classInput>, now: Date = new Date()) {
+  assertCan(actor, "classes", "add");
+  try {
+    return await db.transaction(async (tx) => {
+      // Hai người thêm cùng lúc không nhận trùng một mã tự cấp.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('class_code'))`);
+      const [row] = await tx.insert(classes).values({ ...data, code: await nextCodeOf(tx, now) }).returning();
+      await audit(tx, { userId: actor.userId, action: "create", tableName: "classes", recordId: row!.id, newValue: row });
+      return row!;
+    });
+  } catch (e) {
+    throw translateDbError(e);
+  }
+}
 export async function updateClass(actor: Actor, id: string, data: z.output<typeof classInput>) {
   assertCan(actor, "classes", "edit");
   await assertClassAccess(actor, id);

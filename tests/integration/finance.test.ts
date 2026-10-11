@@ -141,12 +141,12 @@ describe("học phí chưa đóng", () => {
     expect(doc.filename).toBe("hoc-phi-chua-dong");
     const [section] = doc.sections;
     expect(section!.columns.map((c) => c.header)).toEqual([
-      "STT", "Mã HV", "Họ tên", "Lớp", "Khóa học", "Phải đóng (đ)", "Đã đóng (đ)", "Còn lại (đ)", "Trạng thái", "Ghi chú",
+      "STT", "Mã HV", "Họ tên", "Lớp", "Phải đóng (đ)", "Đã đóng (đ)", "Còn lại (đ)", "Trạng thái", "Ghi chú",
     ]);
     expect(section!.rows).toEqual([
-      [1, "A2", "Học viên A2", "A", "Robotics", 2_000_000, 400_000, 1_600_000, "Đóng một phần", ""],
-      [2, "X1", "Học viên X1", "A", "Robotics", 2_000_000, 0, 2_000_000, "Chưa đóng", "Đã rời lớp"],
-      ["", "", "Tổng cộng", "", "", 4_000_000, 400_000, 3_600_000, "", ""],
+      [1, "A2", "Học viên A2", "A", 2_000_000, 400_000, 1_600_000, "Đóng một phần", ""],
+      [2, "X1", "Học viên X1", "A", 2_000_000, 0, 2_000_000, "Chưa đóng", "Đã rời lớp"],
+      ["", "", "Tổng cộng", "", 4_000_000, 400_000, 3_600_000, "", ""],
     ]);
     // Số điện thoại trong hồ sơ học viên (0900000000) không xuất hiện ở bất kỳ ô nào.
     expect(JSON.stringify(doc)).not.toContain("0900000000");

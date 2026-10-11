@@ -118,10 +118,6 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
         )}
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
           <div className="flex gap-2">
-            <dt className="text-muted-foreground">Khóa học:</dt>
-            <dd>{cls.courseName}</dd>
-          </div>
-          <div className="flex gap-2">
             <dt className="text-muted-foreground">Phòng mặc định:</dt>
             <dd>{cls.roomName ?? "Chưa chọn"}</dd>
           </div>
@@ -191,13 +187,13 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
         <h2 className="text-lg font-semibold">Buổi học</h2>
         <p className="text-sm text-muted-foreground">
           Buổi học được xếp theo lịch mẫu (đúng thứ, ca, phòng, GV chính và trợ giảng) trong thời gian {formatDate(cls.startDate)} –{" "}
-          {formatDate(cls.endDate)}, bỏ ngày nghỉ, đủ số buổi của khóa học. Bấm nút dưới đây để xếp lại toàn bộ buổi chưa dạy theo lịch mẫu
+          {formatDate(cls.endDate)}, bỏ ngày nghỉ. Lớp học tiếp khóa sau thì dời Ngày kết thúc của lớp rồi sinh thêm buổi. Bấm nút dưới đây để xếp lại toàn bộ buổi chưa dạy theo lịch mẫu
           hiện tại; buổi đã điểm danh, đã ghi sao và buổi đã hủy giữ nguyên.
         </p>
         {overview.scheduled + overview.makeup > 0 ? (
           <div className="grid gap-2 glass-solid rounded-xl border p-3 text-sm">
             <p>
-              Đã xếp <strong>{overview.scheduled}/{overview.courseSessions}</strong> buổi theo khóa học
+              Đã xếp <strong>{overview.scheduled}</strong> buổi
               {overview.first && overview.last && (
                 <>
                   , từ {WEEKDAY_LABELS[isoWeekday(overview.first.date)]} {formatDate(overview.first.date)} đến{" "}
@@ -208,9 +204,6 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
               {overview.makeup > 0 && ` · ${overview.makeup} buổi bù`}
               {overview.cancelled > 0 && ` · ${overview.cancelled} buổi đã hủy`}.
             </p>
-            {tracksStudents && overview.scheduled < overview.courseSessions && (
-              <p className="text-destructive">Còn thiếu {overview.courseSessions - overview.scheduled} buổi so với khóa học. Bấm “Sinh buổi học từ lịch mẫu” để xếp đủ.</p>
-            )}
             {tracksStudents && overview.missingTeacher > 0 && (
               <p className="text-destructive">
                 {overview.missingTeacher} buổi chưa có giáo viên. Hãy phân công GV chính cho lớp hoặc chọn GV trong lịch mẫu, rồi bấm “Sinh buổi học từ

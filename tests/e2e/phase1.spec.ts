@@ -221,7 +221,9 @@ test("Admin: đổi mật khẩu → bắt buộc thiết lập 2FA → quản l
   await page.getByRole("button", { name: "Mở menu" }).click();
   await page.getByRole("link", { name: "Lớp học" }).click();
   await expect(page).toHaveURL(/\/admin\/classes$/);
-  await expect(visibleText(page, "RB-CB01 – Robotics Cơ bản 01")).toBeVisible();
+  // Cột Lớp chỉ hiện tên lớp, không hiện mã lớp.
+  await expect(visibleText(page, "Robotics Cơ bản 01")).toBeVisible();
+  await expect(page.getByText(/RB-CB01/)).toHaveCount(0);
   await page.screenshot({ path: "test-results/shots/admin-classes-360.png" });
   await expectNoHorizontalScroll(page);
 });

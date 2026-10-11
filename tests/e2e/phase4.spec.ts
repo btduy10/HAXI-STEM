@@ -62,7 +62,9 @@ test("Admin: cấu hình, đóng lớp, chốt tổng kết, duyệt và trao qu
   await expect(page.getByText("Sticker robot").filter({ visible: true }).first()).toBeVisible();
   await expectNoHorizontalScroll(page);
   await page.goto("/admin/rewards?tab=tiers");
-  await expect(page.getByText("Khóa Robotics Nâng cao").filter({ visible: true }).first()).toBeVisible();
+  // Mốc quà đặt theo lớp (lớp không gắn với khóa học); form không còn ô "Áp dụng cho khóa học".
+  await expect(page.getByText("RB-NC01 – Robotics Nâng cao 01").filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByText(/^Khóa /)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 
   // Tổng kết: lớp đang mở, còn buổi hôm nay chưa điểm danh → không đóng được.

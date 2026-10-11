@@ -26,16 +26,12 @@ beforeEach(async () => {
   [morning] = (await db.insert(timeSlots).values({ name: "Ca sáng", frame: 1, defaultStart: "08:00", defaultEnd: "09:30" }).returning()) as [
     typeof timeSlots.$inferSelect,
   ];
-  lend = await classSvc.createClass(f.admin, {
-    code: "MP",
-    name: "Mượn phòng",
-    courseId: f.course.id,
-    defaultRoomId: f.room.id,
-    startDate: "2026-01-06",
-    endDate: "2026-03-31",
-    maxSize: 1,
-    timetableOnly: true,
-  });
+  // Mã lớp do máy chủ tự cấp theo năm tạo: lớp đầu tiên của năm 2026 là RB2601.
+  lend = await classSvc.createClass(
+    f.admin,
+    { name: "Mượn phòng", defaultRoomId: f.room.id, startDate: "2026-01-06", endDate: "2026-03-31", maxSize: 1, timetableOnly: true },
+    new Date("2026-01-05T05:00:00Z"),
+  );
   await db.insert(scheduleTemplates).values({ classId: lend.id, weekday: 2, timeSlotId: morning.id, teacherId: f.teacherA.id });
   await svc.generateSessions(f.admin, lend.id);
 });
@@ -45,12 +41,12 @@ const firstSession = async () => (await db.select().from(sessions).where(eq(sess
 describe("lớp chỉ hiển thị trên Thời khóa biểu", () => {
   it("chỉ có trên Thời khóa biểu: không có trong danh sách lớp, buổi học, buổi quá hạn, học phí, chấm công, số lớp đang mở, tệp xuất", async () => {
     expect((await classSvc.listClasses(f.admin)).map((c) => c.code)).toEqual(["A", "B"]);
-    expect((await classSvc.listClasses(f.admin, { includeTimetableOnly: true })).map((c) => c.code).sort()).toEqual(["A", "B", "MP"]);
+    expect((await classSvc.listClasses(f.admin, { includeTimetableOnly: true })).map((c) => c.code).sort()).toEqual(["A", "B", "RB2601"]);
 
     expect(await svc.listSessions(f.admin, range)).toEqual([]);
     const shown = await svc.listSessions(f.admin, { ...range, includeTimetableOnly: true });
     expect(shown).toHaveLength(1);
-    expect(shown[0]).toMatchObject({ classCode: "MP", date: "2026-01-06", timetableOnly: true, roomId: f.room.id });
+    expect(shown[0]).toMatchObject({ classCode: "RB2601", date: "2026-01-06", timetableOnly: true, roomId: f.room.id });
     // Giáo viên được xếp vào buổi vẫn thấy buổi trên Thời khóa biểu của mình, nhưng không ở nơi khác.
     expect(await svc.listSessions(f.actorA, { ...range, personal: true, includeTimetableOnly: true })).toHaveLength(1);
     expect(await svc.listSessions(f.actorA, { ...range, personal: true })).toEqual([]);
@@ -97,9 +93,7 @@ describe("lớp chỉ hiển thị trên Thời khóa biểu", () => {
 
   it("chỉ bật được cho lớp chưa có dữ liệu học viên; tắt thì luôn được", async () => {
     const input = (cls: typeof classes.$inferSelect, timetableOnly: boolean) => ({
-      code: cls.code,
       name: cls.name,
-      courseId: cls.courseId,
       defaultRoomId: cls.defaultRoomId,
       startDate: cls.startDate,
       endDate: cls.endDate,
@@ -115,7 +109,7 @@ describe("lớp chỉ hiển thị trên Thời khóa biểu", () => {
     // Sửa thông tin khác của lớp đang là "chỉ Thời khóa biểu" không bị chặn.
     await classSvc.updateClass(f.admin, lend.id, { ...input(lend, true), name: "Cho mượn phòng Lab" });
     await classSvc.updateClass(f.admin, lend.id, input(lend, false));
-    expect((await classSvc.listClasses(f.admin)).map((c) => c.code).sort()).toEqual(["A", "B", "MP"]);
+    expect((await classSvc.listClasses(f.admin)).map((c) => c.code).sort()).toEqual(["A", "B", "RB2601"]);
     expect(await svc.listSessions(f.admin, range)).toHaveLength(1);
   });
 });

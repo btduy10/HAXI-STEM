@@ -35,8 +35,8 @@ beforeEach(async () => {
   const tiers = await db
     .insert(rewardTiers)
     .values([
-      { courseId: f.course.id, minStars: 10, giftId: sticker!.id },
-      { courseId: f.course.id, minStars: 30, giftId: kit!.id },
+      { classId: f.classA.id, minStars: 10, giftId: sticker!.id },
+      { classId: f.classA.id, minStars: 30, giftId: kit!.id },
     ])
     .returning();
   [tier10, tier30] = [tiers[0]!.id, tiers[1]!.id];
@@ -71,7 +71,7 @@ describe("đổi quà bằng sao", () => {
     expect((await redemptions.getRedemptionInfo(f.actorA, a1())).options).toEqual([]);
     // GV lớp khác dù có quyền đổi quà cũng không đổi cho học viên ngoài lớp mình.
     await expect(redemptions.redeemGift(withRewards(f.actorB), { studentId: a1(), tierId: tier10 })).rejects.toMatchObject({ code: "NOT_FOUND" });
-    // Mốc quà riêng của lớp B không áp dụng cho học viên lớp A.
+    // Mốc quà của lớp B không áp dụng cho học viên lớp A.
     const [other] = await db.insert(rewardTiers).values({ classId: f.classB.id, minStars: 5, giftId }).returning();
     await expect(redemptions.redeemGift(f.admin, { studentId: a1(), tierId: other!.id })).rejects.toMatchObject({ code: "VALIDATION" });
     expect(await db.select().from(giftRedemptions)).toEqual([]);
