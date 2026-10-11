@@ -167,6 +167,12 @@ export const leaveInput = z.object({
   leftAt: isoDate,
 });
 
+/** Sửa ngày vào lớp của một lượt ghi danh. */
+export const joinDateInput = z.object({
+  id,
+  joinedAt: isoDate,
+});
+
 export const password = z
   .string({ error: "Bắt buộc nhập" })
   .min(8, "Mật khẩu tối thiểu 8 ký tự")

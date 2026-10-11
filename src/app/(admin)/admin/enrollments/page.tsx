@@ -18,6 +18,7 @@ import {
   enrollStudentAction,
   leaveEnrollmentAction,
   placeStudentAction,
+  updateJoinDateAction,
 } from "@/server/actions/admin";
 import { seesAllClasses, seesStudentPrivate } from "@/server/guard";
 import { listClasses, listEnrollments, weeklyRoster } from "@/server/services/classes";
@@ -130,6 +131,20 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Nhập sai ngày vào lớp: sửa được khi lớp còn mở (lớp đã đóng thì tổng kết đã chốt). */}
+                    {can("edit") && current.status === "open" && (
+                      <FormDialogButton
+                        label="Sửa ngày vào lớp"
+                        variant="outline"
+                        title={`Sửa ngày vào lớp của ${e.fullName}`}
+                        description="Không dời được ngày vào lớp ra sau buổi em đã được điểm danh hoặc ghi sao ở lớp này."
+                        fields={[{ name: "joinedAt", label: "Ngày vào lớp", type: "date", required: true }]}
+                        initial={{ joinedAt: e.joinedAt }}
+                        fixed={{ id: e.id }}
+                        action={updateJoinDateAction}
+                        successMessage="Đã cập nhật ngày vào lớp."
+                      />
+                    )}
                     {e.status === "active" && can("edit") ? (
                       <FormDialogButton
                         label="Cho rời lớp"

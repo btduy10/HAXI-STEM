@@ -12,6 +12,7 @@ import {
   courseUpdate,
   enrollInput,
   holidayInput,
+  joinDateInput,
   leaveInput,
   newEnrollmentInput,
   lockInput,
@@ -124,6 +125,7 @@ export const enrollNewStudentAction = async (input: unknown) =>
   runAction(newEnrollmentInput, input, (a, d) => classes.enrollNewStudent(a, d), ADMIN);
 export const assignMakeupAction = async (input: unknown) => runAction(makeupAssignInput, input, (a, d) => makeups.assignMakeup(a, d), ADMIN);
 export const cancelMakeupAction = async (input: unknown) => runAction(idOnly, input, (a, d) => makeups.cancelMakeup(a, d.id), ADMIN);
+export const updateJoinDateAction = async (input: unknown) => runAction(joinDateInput, input, classes.updateJoinDate, ADMIN);
 export const leaveEnrollmentAction = async (input: unknown) => runAction(leaveInput, input, classes.leaveEnrollment, ADMIN);
 export const deleteEnrollmentAction = async (input: unknown) =>
   runAction(idOnly, input, (a, d) => classes.deleteEnrollment(a, d.id), ADMIN);

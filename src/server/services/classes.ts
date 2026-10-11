@@ -22,8 +22,8 @@ import {
 } from "@/db/schema";
 import { classCodeYearPrefix, nextClassCode } from "@/domain/student-code";
 import { ROSTER_NO_TEACHER_SHADE, rosterSessionLabel, rosterSessionOrder, rosterTeacherShade } from "@/domain/roster";
-import { todayIso } from "@/lib/format";
-import type { classInput, enrollInput, leaveInput, newEnrollmentInput } from "@/lib/validation/entities";
+import { formatDate, todayIso } from "@/lib/format";
+import type { classInput, enrollInput, joinDateInput, leaveInput, newEnrollmentInput } from "@/lib/validation/entities";
 import { audit } from "../audit";
 import { AppError, notFound, translateDbError } from "../errors";
 import { type Actor, allowedClassIds, assertAdmin, assertCan, assertCanAny, assertClassAccess, assertNotTimetableOnly } from "../guard";
@@ -385,6 +385,67 @@ export async function enrollNewStudent(actor: Actor, data: z.output<typeof newEn
   } catch (e) {
     throw translateDbError(e);
   }
+}
+
+/**
+ * Sửa ngày vào lớp của một lượt ghi danh (nhập sai ngày). Không dời ra sau buổi em đã được điểm danh hoặc ghi sao ở lớp:
+ * dữ liệu của buổi đó sẽ nằm ngoài thời gian ghi danh.
+ */
+export async function updateJoinDate(actor: Actor, data: z.output<typeof joinDateInput>) {
+  assertCan(actor, "enrollments", "edit");
+  return db.transaction(async (tx) => {
+    const [before] = await tx.select().from(enrollments).where(eq(enrollments.id, data.id)).for("update").limit(1);
+    if (!before) throw notFound("ghi danh");
+    await assertClassAccess(actor, before.classId, tx);
+    const [cls] = await tx.select({ status: classes.status }).from(classes).where(eq(classes.id, before.classId)).limit(1);
+    if (cls?.status !== "open") throw new AppError("CONFLICT", "Lớp đã đóng và đã chốt tổng kết nên không sửa ngày vào lớp được.");
+    if (before.leftAt && data.joinedAt > before.leftAt) {
+      throw new AppError("VALIDATION", "Ngày vào lớp phải trước ngày rời lớp.", { joinedAt: "Phải trước ngày rời lớp" });
+    }
+    if (data.joinedAt === before.joinedAt) return before;
+    if (data.joinedAt > before.joinedAt) {
+      // Các buổi của lớp sẽ rơi ra ngoài thời gian ghi danh: từ ngày vào lớp cũ đến trước ngày vào lớp mới.
+      const skipped = and(eq(sessions.classId, before.classId), gte(sessions.date, before.joinedAt), lt(sessions.date, data.joinedAt));
+      const [[attended], [starred]] = await Promise.all([
+        tx
+          .select({ date: sessions.date })
+          .from(attendances)
+          .innerJoin(sessions, eq(sessions.id, attendances.sessionId))
+          .where(and(eq(attendances.studentId, before.studentId), skipped))
+          .orderBy(asc(sessions.date))
+          .limit(1),
+        tx
+          .select({ date: sessions.date })
+          .from(starLogs)
+          .innerJoin(sessions, eq(sessions.id, starLogs.sessionId))
+          .where(and(eq(starLogs.studentId, before.studentId), skipped))
+          .orderBy(asc(sessions.date))
+          .limit(1),
+      ]);
+      const first = [attended?.date, starred?.date].filter((d): d is string => !!d).sort()[0];
+      if (first) {
+        throw new AppError(
+          "CONFLICT",
+          `Em đã được điểm danh hoặc ghi sao ở buổi ${formatDate(first)} của lớp này nên ngày vào lớp không thể sau ngày đó.`,
+          { joinedAt: `Không sau ${formatDate(first)}` },
+        );
+      }
+    }
+    const [row] = await tx
+      .update(enrollments)
+      .set({ joinedAt: data.joinedAt, updatedAt: new Date() })
+      .where(eq(enrollments.id, data.id))
+      .returning();
+    await audit(tx, {
+      userId: actor.userId,
+      action: "update",
+      tableName: "enrollments",
+      recordId: data.id,
+      oldValue: before,
+      newValue: row,
+    });
+    return row!;
+  });
 }
 
 /** Cho học viên rời lớp từ ngày `leftAt` (giữ lịch sử, không xóa). */

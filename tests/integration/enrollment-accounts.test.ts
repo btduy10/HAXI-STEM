@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/db";
 import { account, attendances, auditLogs, classes as classesTable, session, sessions, starLogs, students, syllabusLessons, teachers, user } from "@/db/schema";
+import { DEFAULT_PERMISSIONS } from "@/lib/permissions";
+import type { Actor } from "@/server/guard";
 import type { MailMessage } from "@/server/mailer";
 import { verifyPassword } from "@/server/password";
 import * as accounts from "@/server/services/accounts";
@@ -82,6 +84,60 @@ describe("ghi danh", () => {
 
     await db.update(classesTable).set({ status: "closed" }).where(eq(classesTable.id, f.classA.id));
     await expect(classes.deleteEnrollment(f.admin, a2.id)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("sửa ngày vào lớp: theo quyền Sửa và phạm vi lớp, không dời ra sau buổi đã điểm danh hoặc ghi sao, không sửa ở lớp đã đóng", async () => {
+    const list = await classes.listEnrollments(f.admin, f.classA.id);
+    const [a1, a2] = [list.find((e) => e.code === "A1")!, list.find((e) => e.code === "A2")!]; // cùng vào lớp 05/01/2026
+    const joinedAt = async (id: string) => (await classes.listEnrollments(f.admin, f.classA.id)).find((e) => e.id === id)!.joinedAt;
+
+    // Giáo viên mặc định không có quyền Sửa của menu Ghi danh.
+    await expect(classes.updateJoinDate(f.actorA, { id: a1.id, joinedAt: "2026-01-08" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Có quyền Sửa nhưng phạm vi "lớp của mình": giáo viên lớp B không sửa được ghi danh của lớp A.
+    const editor = (actor: Actor): Actor => ({
+      ...actor,
+      perms: { scope: "own", menus: { ...DEFAULT_PERMISSIONS.teacher.menus, enrollments: { view: true, add: true, edit: true } } },
+    });
+    await expect(classes.updateJoinDate(editor(f.actorB), { id: a1.id, joinedAt: "2026-01-08" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await joinedAt(a1.id)).toBe("2026-01-05");
+
+    expect((await classes.updateJoinDate(editor(f.actorA), { id: a1.id, joinedAt: "2026-01-08" })).joinedAt).toBe("2026-01-08");
+    const [log] = await db.select().from(auditLogs).where(eq(auditLogs.recordId, a1.id));
+    expect(log).toMatchObject({ action: "update", tableName: "enrollments", oldValue: { joinedAt: "2026-01-05" }, newValue: { joinedAt: "2026-01-08" } });
+    // Dời về sớm hơn luôn được; nhập lại đúng ngày cũ thì không ghi thêm nhật ký.
+    await classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-02" });
+    await classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-02" });
+    expect(await db.select().from(auditLogs).where(eq(auditLogs.recordId, a1.id))).toHaveLength(2);
+
+    // A1 đã được điểm danh buổi 12/01, A2 chỉ được ghi sao buổi 14/01; dữ liệu ở lớp khác không tính.
+    const session = (classId: string, date: string) => ({ classId, date, startTime: "08:00", endTime: "09:30" });
+    const [held, starred, other] = await db
+      .insert(sessions)
+      .values([session(f.classA.id, "2026-01-12"), session(f.classA.id, "2026-01-14"), session(f.classB.id, "2026-01-07")])
+      .returning();
+    await db.insert(attendances).values([
+      { sessionId: held!.id, studentId: a1.studentId, status: "absent" },
+      { sessionId: other!.id, studentId: a1.studentId, status: "present" },
+    ]);
+    await db.insert(starLogs).values({ sessionId: starred!.id, studentId: a2.studentId, stars: 2 });
+
+    await classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-12" }); // đúng ngày buổi đã điểm danh: được
+    await expect(classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-13" })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-13" })).rejects.toThrow("12/01/2026");
+    await expect(classes.updateJoinDate(f.admin, { id: a2.id, joinedAt: "2026-01-20" })).rejects.toThrow("14/01/2026");
+    await classes.updateJoinDate(f.admin, { id: a2.id, joinedAt: "2026-01-14" });
+    expect([await joinedAt(a1.id), await joinedAt(a2.id)]).toEqual(["2026-01-12", "2026-01-14"]);
+
+    // Lượt đã rời lớp: ngày vào lớp không được sau ngày rời lớp; trong khoảng đó thì sửa được.
+    await classes.leaveEnrollment(f.admin, { id: a1.id, leftAt: "2026-02-01" });
+    await expect(classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-02-02" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await classes.updateJoinDate(f.admin, { id: a1.id, joinedAt: "2026-01-10" });
+    expect(await joinedAt(a1.id)).toBe("2026-01-10");
+
+    // Lớp đã đóng (tổng kết đã chốt): không sửa nữa.
+    await db.update(classesTable).set({ status: "closed" }).where(eq(classesTable.id, f.classA.id));
+    await expect(classes.updateJoinDate(f.admin, { id: a2.id, joinedAt: "2026-01-06" })).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await joinedAt(a2.id)).toBe("2026-01-14");
   });
 
   it("không ghi danh học viên đã nghỉ hoặc vào lớp đã đóng", async () => {

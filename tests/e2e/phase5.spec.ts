@@ -406,6 +406,23 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
     await block.getByRole("link", { name: "Lớp thử ghi danh" }).click();
     await expect(page).toHaveURL(new RegExp(`classId=${rosterClassId}`));
     await expect(page.getByRole("button", { name: "Cho rời lớp" })).toHaveCount(2);
+    // Sửa ngày vào lớp nhập sai ngay ở danh sách chi tiết: ô ngày mở sẵn ngày đang ghi, lưu xong dòng hiện ngày mới.
+    const editJoin = page.getByRole("button", { name: "Sửa ngày vào lớp" });
+    await expect(editJoin).toHaveCount(2);
+    const vnDate = (iso: string) => iso.split("-").reverse().join("/");
+    const row = page.locator("li").filter({ hasText: first });
+    await expect(row).toContainText(`Vào lớp ${vnDate(day)}`);
+    await row.getByRole("button", { name: "Sửa ngày vào lớp" }).click();
+    await expect(page.getByRole("dialog")).toContainText(`Sửa ngày vào lớp của ${first}`);
+    await expect(page.locator("#f-joinedAt")).toHaveValue(day);
+    await page.locator("#f-joinedAt").fill(shift(day, -3));
+    await expectNoHorizontalScroll(page);
+    await page.getByRole("button", { name: "Lưu" }).click();
+    await expect(page.getByText("Đã cập nhật ngày vào lớp.")).toBeVisible();
+    await expect(row).toContainText(`Vào lớp ${vnDate(shift(day, -3))}`);
+    await expect(page.locator("li").filter({ hasText: second })).toContainText(`Vào lớp ${vnDate(day)}`);
+    await expectNoHorizontalScroll(page);
+    await page.screenshot({ path: "test-results/shots/enrollment-join-date-360.png", fullPage: true });
     await page.getByRole("link", { name: /Tổng quan ghi danh/ }).click();
     await expect(page).toHaveURL(/\/admin\/enrollments$/);
     await expect(blocks).toHaveCount(1);

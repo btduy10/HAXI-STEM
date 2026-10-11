@@ -23,7 +23,7 @@ export const PERMISSION_MENUS = [
   { key: "teachers", label: "Giáo viên", href: "/admin/teachers", actions: ["view", "add", "edit"], hint: "" },
   { key: "classes", label: "Lớp học", href: "/admin/classes", actions: ["view", "add", "edit"], hint: "Sửa gồm cả phân công giáo viên, lịch mẫu và sinh buổi học." },
   { key: "syllabus", label: "Syllabus", href: "/admin/syllabus", actions: ["view", "add", "edit", "delete"], hint: "Chương trình dạy theo Lớp + Khóa học + Buổi. Thêm gồm cả nhập từ Excel (bài đã có chỉ được cập nhật khi có Sửa)." },
-  { key: "enrollments", label: "Ghi danh", href: "/admin/enrollments", actions: ["view", "add", "edit"], hint: "Thêm = nhập học viên mới, ghi danh, xếp lớp, xếp học bù; Sửa = cho rời lớp, hủy xếp bù." },
+  { key: "enrollments", label: "Ghi danh", href: "/admin/enrollments", actions: ["view", "add", "edit"], hint: "Thêm = nhập học viên mới, ghi danh, xếp lớp, xếp học bù; Sửa = sửa ngày vào lớp, cho rời lớp, hủy xếp bù." },
   { key: "students", label: "QL Học viên", href: "/admin/students", actions: ["view", "edit"], hint: "Xem danh sách, hồ sơ, lịch sử học; Sửa = sửa thông tin học viên. Học viên mới nhập ở Ghi danh. Ngày sinh, phụ huynh, điện thoại, ghi chú chỉ hiện khi tick “Thông tin cá nhân học viên”." },
   { key: "timetable", label: "Thời khóa biểu", href: "/admin/timetable", actions: ["view", "add", "edit"], hint: "Thêm = xếp buổi, buổi bù; Sửa = sửa, dời, hủy, khôi phục, dạy thay." },
   { key: "attendance", label: "Điểm danh", href: "/admin/attendance", actions: ["view", "add", "edit"], hint: "Thêm = điểm danh buổi chưa điểm danh; Sửa = sửa điểm danh đã lưu." },
