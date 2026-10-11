@@ -207,8 +207,9 @@ export async function unassignTeacher(actor: Actor, id: string) {
 const substituteTeacher = alias(teachers, "substitute");
 
 /**
- * Tổng quan Ghi danh theo buổi học trong tuần: mỗi buổi (thứ + ca) của một lớp đang mở là một khung,
- * kèm giờ học, giáo viên và học viên đang học của lớp (chỉ họ tên và khối). Lớp học nhiều buổi/tuần xuất hiện ở từng buổi.
+ * Tổng quan Ghi danh theo buổi học trong tuần: mỗi lớp đang mở là một khung, liệt kê các buổi (thứ + ca) trong tuần của lớp
+ * kèm giờ học, giáo viên và học viên đang học của lớp (chỉ họ tên và khối). Lớp học nhiều buổi/tuần với cùng một giáo viên
+ * gom về một khung; buổi do giáo viên khác dạy là khung riêng.
  * Buổi lấy từ Thời khóa biểu của tuần chứa `today` (buổi chưa hủy, không tính buổi bù) nên luôn khớp Thời khóa biểu;
  * lớp không có buổi nào trong tuần (tuần nghỉ, chưa sinh buổi) thì lấy theo lịch mẫu.
  * Chỉ các lớp trong phạm vi của người dùng; không gồm lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu.
@@ -323,17 +324,29 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
       .filter((s) => s.classId === classId)
       .map((s) => ({ id: s.id, enrollmentId: s.enrollmentId, fullName: s.fullName, schoolGrade: s.schoolGrade }));
   const classOf = new Map(open.map((c) => [c.id, c]));
-  const placed = [...merged.entries()]
-    .map(([key, slot]) => {
-      const cls = classOf.get(slot.classId)!;
+  // Cùng một lớp, cùng giáo viên: các buổi trong tuần gom về một khung (lớp học nhiều buổi/tuần chỉ một bảng học viên).
+  const grouped = new Map<string, Slot[]>();
+  for (const slot of merged.values()) {
+    const key = `${slot.classId}|${slot.teacher?.id ?? ""}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), slot]);
+  }
+  const placed = [...grouped.entries()]
+    .map(([key, slots]) => {
+      const cls = classOf.get(slots[0]!.classId)!;
+      const teacher = slots[0]!.teacher;
       return {
         key,
-        label: rosterSessionLabel(slot.slotName, slot.weekday),
-        order: rosterSessionOrder(slot.slotName, slot.weekday),
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        teacherId: slot.teacher?.id ?? null,
-        teacherName: slot.teacher?.name || null,
+        // Các buổi của khung theo thứ tự trong tuần: buổi sớm hơn nằm trên.
+        sessions: slots
+          .map((slot) => ({
+            label: rosterSessionLabel(slot.slotName, slot.weekday),
+            order: rosterSessionOrder(slot.slotName, slot.weekday),
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+          }))
+          .sort((a, b) => a.order - b.order || a.startTime.localeCompare(b.startTime)),
+        teacherId: teacher?.id ?? null,
+        teacherName: teacher?.name || null,
         classId: cls.id,
         classCode: cls.code,
         className: cls.name,
@@ -342,11 +355,14 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
         students: studentsOf(cls.id),
       };
     })
-    // Cùng một buổi: lớp học sớm hơn đứng trước.
-    .sort((a, b) => a.order - b.order || a.startTime.localeCompare(b.startTime) || a.classCode.localeCompare(b.classCode, "vi"));
+    // Khung đứng theo buổi đầu tiên trong tuần của nó; cùng một buổi thì lớp học sớm hơn đứng trước.
+    .sort((a, b) => {
+      const [x, y] = [a.sessions[0]!, b.sessions[0]!];
+      return x.order - y.order || x.startTime.localeCompare(y.startTime) || a.classCode.localeCompare(b.classCode, "vi");
+    });
 
-  // Màu khung: mỗi giáo viên một tông; các buổi của cùng một người xen kẽ nhạt – đậm theo thứ tự trong tuần
-  // (buổi chẵn lấy nửa nhạt, buổi lẻ lấy nửa đậm) để hai buổi kề nhau luôn khác rõ.
+  // Màu khung: mỗi giáo viên một tông; các khung của cùng một người xen kẽ nhạt – đậm theo thứ tự trong tuần
+  // (khung chẵn lấy nửa nhạt, khung lẻ lấy nửa đậm) để hai khung kề nhau luôn khác rõ.
   const ordered = [...teacherOrder.filter((t) => t.status === "active"), ...teacherOrder.filter((t) => t.status !== "active")];
   const toneOf = new Map(ordered.map((t, index) => [t.id, index]));
   const perTeacher = new Map<string, number>();

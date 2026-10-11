@@ -262,7 +262,7 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   }
 });
 
-test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp - GV), mỗi lớp 8 hàng, hàng trống đánh số theo chỗ còn lại, lớp đủ sĩ số không thêm được", async ({ page }) => {
+test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp - GV), lớp học nhiều buổi gom một bảng, mỗi lớp 8 hàng, hàng trống đánh số theo chỗ còn lại, lớp đủ sĩ số không thêm được", async ({ page }) => {
   await login(page, "admin", NEW_PASSWORD);
   await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
   await page.getByRole("button", { name: "Xác nhận" }).click();
@@ -286,13 +286,15 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
   try {
     await page.goto("/admin/enrollments");
     await expect(page.getByRole("heading", { name: "Ghi danh", exact: true })).toBeVisible();
-    // Lớp học 2 buổi/tuần hiện ở cả hai buổi, theo thứ tự ngày trong tuần (Thứ 2 trước Thứ 7).
+    // Lớp học 2 buổi/tuần với cùng giáo viên gom một bảng: mỗi buổi một dòng tiêu đề, theo thứ tự ngày trong tuần (Thứ 2 trên Thứ 7).
     const blocks = page.locator('[data-roster="GD-E2E"]');
-    await expect(blocks).toHaveCount(2);
-    // Tiêu đề: hàng trên "Buổi - giờ", hàng dưới "Tên lớp - Tên GV" (lớp thử chưa có giáo viên nên chỉ có tên lớp).
-    await expect(blocks.nth(0).getByRole("heading")).toHaveText("Tối Thứ 2 - 18h00 - 19h30");
-    await expect(blocks.nth(1).getByRole("heading")).toHaveText("Sáng Thứ 7 - 08h00 - 09h30");
-    await expect(blocks.nth(0).getByRole("link")).toHaveText("Lớp thử ghi danh");
+    await expect(blocks).toHaveCount(1);
+    // Tiêu đề: các hàng trên "Buổi - giờ", hàng dưới "Tên lớp - Tên GV" (lớp thử chưa có giáo viên nên chỉ có tên lớp).
+    const lines = blocks.getByRole("heading").locator("span");
+    await expect(lines).toHaveText(["Tối Thứ 2 - 18h00 - 19h30", "Sáng Thứ 7 - 08h00 - 09h30"]);
+    const [upper, lower] = [(await lines.nth(0).boundingBox())!, (await lines.nth(1).boundingBox())!];
+    expect(lower.y).toBeGreaterThanOrEqual(upper.y + upper.height - 1);
+    await expect(blocks.getByRole("link")).toHaveText("Lớp thử ghi danh");
     // Lớp có giáo viên: tên lớp kèm tên giáo viên của buổi.
     await expect(page.locator('[data-roster="RB-CB01"]').first().getByRole("link")).toHaveText(/^Robotics Cơ bản 01 - \S/);
     // Lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu không có trong bảng.
@@ -303,9 +305,8 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
     await expect(block.getByRole("columnheader")).toHaveText(["STT", "Họ tên HS", "Lớp"]);
     // Cả hàng tiêu đề canh giữa.
     for (const name of ["STT", "Họ tên HS", "Lớp"]) await expect(block.getByRole("columnheader", { name })).toHaveCSS("text-align", "center");
-    // Màu khung theo giáo viên: lớp thử chưa có giáo viên nên hai buổi cùng màu xám; lớp có giáo viên mang màu của giáo viên.
+    // Màu khung theo giáo viên: lớp thử chưa có giáo viên nên màu xám; lớp có giáo viên mang màu của giáo viên.
     const headerColor = (roster: typeof block) => roster.locator("header").evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(await headerColor(blocks.nth(1))).toBe(await headerColor(block));
     expect(await headerColor(page.locator('[data-roster="RB-CB01"]').first())).not.toBe(await headerColor(block));
     await expect(block.locator("tbody tr")).toHaveCount(8);
     // Lớp tối đa 2 học viên: hai chỗ trống được đánh số, các hàng còn lại để trống; không còn dấu +.
@@ -342,8 +343,6 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
     await expect(page.getByText("Đã ghi danh.")).toHaveCount(0);
     await expect(block.getByText("1/2")).toBeVisible();
     await expect(addButtons).toHaveText(["Thêm 1 học viên"]);
-    // Cùng lớp ở buổi kia cũng có học viên này.
-    await expect(blocks.nth(1).locator("tbody tr").first()).toContainText(first);
     await expect(block.locator("tbody tr").first().locator("td").last()).toHaveText("5");
 
     // Thẻ "Thêm học viên": em đang học lớp này không nằm trong danh sách; chọn một em đã có trong QL Học viên.
@@ -370,7 +369,7 @@ test("Ghi danh: tổng quan theo buổi trong tuần (buổi - giờ, tên lớp
     await expect(page.getByRole("button", { name: "Cho rời lớp" })).toHaveCount(2);
     await page.getByRole("link", { name: /Tổng quan ghi danh/ }).click();
     await expect(page).toHaveURL(/\/admin\/enrollments$/);
-    await expect(blocks).toHaveCount(2);
+    await expect(blocks).toHaveCount(1);
 
     // Thứ tự xóa học viên: em còn đang học thì QL Học viên không cho xóa, thông báo nêu tên lớp.
     const removeAtStudents = async (confirmHas: string) => {

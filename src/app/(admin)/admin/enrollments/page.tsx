@@ -174,7 +174,8 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
           canDelete={role === "admin"}
         >
           <p className="text-sm text-muted-foreground">
-            Các lớp đang học theo buổi trong tuần (theo Thời khóa biểu tuần này). Bấm tên lớp để xem lịch sử ghi danh.
+            Các lớp đang học theo buổi trong tuần (theo Thời khóa biểu tuần này); lớp học nhiều buổi trong tuần với cùng giáo viên gom
+            một bảng. Bấm tên lớp để xem lịch sử ghi danh.
             {can("add") && " Bấm một hàng “Thêm … học viên” để chọn học viên đã có hoặc nhập học viên mới vào lớp."}
             {can("edit") && " Bấm tên học viên để cho rời lớp."}
           </p>
@@ -196,8 +197,13 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
                   >
                     <header style={{ backgroundColor: block.shade.header }} className="grid gap-0.5 border-b px-3 py-2">
                       <div className="flex items-baseline justify-between gap-2">
-                        <h2 className="font-semibold">
-                          {block.label} - {rosterTime(block.startTime)} - {rosterTime(block.endTime)}
+                        {/* Lớp học nhiều buổi/tuần với cùng giáo viên: mỗi buổi một dòng, buổi sớm hơn trong tuần nằm trên. */}
+                        <h2 className="grid font-semibold">
+                          {block.sessions.map((s) => (
+                            <span key={s.label}>
+                              {s.label} - {rosterTime(s.startTime)} - {rosterTime(s.endTime)}
+                            </span>
+                          ))}
                         </h2>
                         <span className="text-foreground/80 tabular-nums" aria-label={`Sĩ số ${block.students.length} trên ${block.maxSize}`}>
                           {block.students.length}/{block.maxSize}
@@ -241,7 +247,7 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
                                       classCode={block.classCode}
                                       startDate={block.startDate}
                                       seat={seat}
-                                      label={`Thêm ${seat} học viên vào ${block.className}, ${block.label}`}
+                                      label={`Thêm ${seat} học viên vào ${block.className}, ${block.sessions.map((s) => s.label).join(", ")}`}
                                     />
                                   )}
                                 </td>

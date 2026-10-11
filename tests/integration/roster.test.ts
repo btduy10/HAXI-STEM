@@ -20,7 +20,10 @@ const withEnrollments = (actor: Actor, scope: RolePermissions["scope"]): Actor =
   perms: { scope, menus: { ...DEFAULT_PERMISSIONS.teacher.menus, enrollments: { view: true, add: false, edit: false } } },
 });
 const roster = (actor: Actor = f.admin) => classSvc.weeklyRoster(actor, TODAY);
-const titles = async (actor?: Actor) => (await roster(actor)).blocks.map((b) => `${b.label}|${b.classCode}`);
+type Block = Awaited<ReturnType<typeof roster>>["blocks"][number];
+// Tên khung: các buổi của khung theo thứ tự từ trên xuống, rồi mã lớp.
+const title = (b: Block) => `${b.sessions.map((s) => s.label).join(" + ")}|${b.classCode}`;
+const titles = async (actor?: Actor) => (await roster(actor)).blocks.map(title);
 const hold = (values: Partial<typeof sessions.$inferInsert> & { classId: string; date: string }) =>
   db.insert(sessions).values({ startTime: "19:00", endTime: "20:30", timeSlotId: evening.id, ...values });
 
@@ -49,18 +52,50 @@ beforeEach(async () => {
 describe("tổng quan Ghi danh theo buổi trong tuần", () => {
   it("lớp không có buổi trong tuần lấy theo lịch mẫu: giờ của ca (gộp các khung), GV chính của lớp, kèm học viên và khối", async () => {
     const { blocks, unscheduled } = await roster();
-    expect(blocks.map((b) => `${b.label}|${b.classCode}`)).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Sáng Thứ 7|A"]);
+    // Lớp A học 2 buổi/tuần với cùng giáo viên: một khung, buổi sớm hơn trong tuần nằm trên.
+    expect(blocks.map(title)).toEqual(["Tối Thứ 2|B", "Tối Thứ 5 + Sáng Thứ 7|A"]);
     expect(unscheduled).toEqual([]);
-    const [monday, thursday, saturday] = blocks;
-    expect(monday).toMatchObject({ startTime: "18:00:00", endTime: "19:30:00", teacherName: "Giáo viên B", className: "Lớp B" });
+    const [monday, classA] = blocks;
+    expect(monday).toMatchObject({
+      sessions: [{ label: "Tối Thứ 2", startTime: "18:00:00", endTime: "19:30:00" }],
+      teacherName: "Giáo viên B",
+      className: "Lớp B",
+    });
     // Hai khung của Ca tối trong cùng Thứ Năm là một buổi, giờ từ khung sớm nhất tới khung muộn nhất.
-    expect(thursday).toMatchObject({ classId: f.classA.id, startTime: "18:00:00", endTime: "21:00:00", teacherName: "Giáo viên A", maxSize: 3 });
-    expect(thursday!.students.map((s) => s.fullName)).toEqual(["Học viên A1", "Học viên A2"]);
+    expect(classA).toMatchObject({
+      classId: f.classA.id,
+      sessions: [
+        { label: "Tối Thứ 5", startTime: "18:00:00", endTime: "21:00:00" },
+        { label: "Sáng Thứ 7", startTime: "08:00:00", endTime: "09:30:00" },
+      ],
+      teacherName: "Giáo viên A",
+      maxSize: 3,
+    });
+    expect(classA!.students.map((s) => s.fullName)).toEqual(["Học viên A1", "Học viên A2"]);
     // Kèm lượt ghi danh đang hiệu lực, để cho rời lớp hoặc xóa khỏi lớp ngay trên bảng.
     const [enrollmentA1] = await db.select().from(enrollments).where(eq(enrollments.studentId, f.students[0]!.id));
-    expect(thursday!.students[0]).toEqual({ id: f.students[0]!.id, enrollmentId: enrollmentA1!.id, fullName: "Học viên A1", schoolGrade: 5 });
-    // Lớp học 2 buổi/tuần: cùng danh sách học viên ở cả hai buổi.
-    expect(saturday!.students).toEqual(thursday!.students);
+    expect(classA!.students[0]).toEqual({ id: f.students[0]!.id, enrollmentId: enrollmentA1!.id, fullName: "Học viên A1", schoolGrade: 5 });
+  });
+
+  it("cùng lớp, cùng giáo viên gom một khung theo thứ tự buổi trong tuần; buổi của giáo viên khác là khung riêng", async () => {
+    // Lớp A tuần này học Tối Chủ nhật và Chiều Thứ 7, cùng GV A: một khung, Chiều Thứ 7 nằm trên Tối Chủ nhật.
+    await hold({ classId: f.classA.id, date: "2026-01-18", teacherId: f.teacherA.id });
+    await hold({ classId: f.classA.id, date: "2026-01-17", startTime: "14:00", endTime: "15:30", timeSlotId: null, teacherId: f.teacherA.id });
+    const merged = (await roster()).blocks;
+    expect(merged.map(title)).toEqual(["Tối Thứ 2|B", "Chiều Thứ 7 + Tối Chủ nhật|A"]);
+    expect(merged[1]!.sessions.map((s) => `${s.startTime}-${s.endTime}`)).toEqual(["14:00:00-15:30:00", "19:00:00-20:30:00"]);
+    expect(merged[1]!.students).toHaveLength(2);
+
+    // Buổi Chủ nhật do GV B dạy thay: lớp A có hai khung, mỗi giáo viên một khung, cùng danh sách học viên.
+    await db.update(sessions).set({ substituteTeacherId: f.teacherB.id }).where(eq(sessions.date, "2026-01-18"));
+    const split = (await roster()).blocks;
+    expect(split.map((b) => `${title(b)}|${b.teacherName}`)).toEqual([
+      "Tối Thứ 2|B|Giáo viên B",
+      "Chiều Thứ 7|A|Giáo viên A",
+      "Tối Chủ nhật|A|Giáo viên B",
+    ]);
+    expect(split[2]!.students).toEqual(split[1]!.students);
+    expect(new Set(split.map((b) => b.key)).size).toBe(3);
   });
 
   it("lớp có buổi trên Thời khóa biểu tuần này thì theo Thời khóa biểu, không theo lịch mẫu", async () => {
@@ -73,32 +108,32 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     await hold({ classId: f.classA.id, date: "2026-01-20" });
 
     const { blocks } = await roster();
-    expect(blocks.map((b) => `${b.label}|${b.classCode}`)).toEqual(["Tối Thứ 2|B", "Tối Thứ 7|A"]);
-    expect(blocks[1]).toMatchObject({ startTime: "19:00:00", endTime: "20:30:00", teacherName: "Giáo viên A" });
+    expect(blocks.map(title)).toEqual(["Tối Thứ 2|B", "Tối Thứ 7|A"]);
+    expect(blocks[1]).toMatchObject({ sessions: [{ startTime: "19:00:00", endTime: "20:30:00" }], teacherName: "Giáo viên A" });
 
     // Có giáo viên dạy thay thì ghi người thực dạy (tên viết tắt nếu có).
     await db.update(sessions).set({ substituteTeacherId: f.teacherB.id }).where(eq(sessions.date, "2026-01-17"));
     expect((await roster()).blocks[1]!.teacherName).toBe("Cô B");
   });
 
-  it("cùng một buổi: lớp học sớm hơn đứng trước; buổi không gắn ca suy ca theo giờ bắt đầu", async () => {
+  it("khung đứng theo buổi đầu tuần của nó, cùng một buổi thì lớp học sớm hơn đứng trước; buổi không gắn ca suy ca theo giờ bắt đầu", async () => {
     await hold({ classId: f.classA.id, date: "2026-01-17", startTime: "19:30", endTime: "21:00" });
     await hold({ classId: f.classB.id, date: "2026-01-17", startTime: "18:00", endTime: "19:30" });
     await hold({ classId: f.classA.id, date: "2026-01-18", startTime: "09:00", endTime: "10:30", timeSlotId: null });
     await hold({ classId: f.classB.id, date: "2026-01-18", startTime: "14:00", endTime: "15:30", timeSlotId: null });
-    expect(await titles()).toEqual(["Tối Thứ 7|B", "Tối Thứ 7|A", "Sáng Chủ nhật|A", "Chiều Chủ nhật|B"]);
+    expect(await titles()).toEqual(["Tối Thứ 7 + Chiều Chủ nhật|B", "Tối Thứ 7 + Sáng Chủ nhật|A"]);
   });
 
-  it("màu khung theo giáo viên: các buổi của cùng một người cùng tông, đậm nhạt khác nhau; chưa có giáo viên thì xám", async () => {
+  it("màu khung theo giáo viên: các khung của cùng một người cùng tông, đậm nhạt khác nhau; chưa có giáo viên thì xám", async () => {
     const tone = (color: string) => color.slice(6, -1).split(" ").map(Number);
     const headers = async () => (await roster()).blocks.map((b) => tone(b.shade.header));
-    // Tối Thứ 2 (GV B) · Tối Thứ 5 (GV A) · Sáng Thứ 7 (GV A): GV A xếp trước theo mã nên nhận tông vàng, GV B tông xanh dương.
-    const [monday, thursday, saturday] = await headers();
-    expect([monday![2], thursday![2], saturday![2]]).toEqual([255, 75, 75]);
-    // Hai buổi của GV A: buổi đầu nhạt nhất, buổi sau đậm nhất; GV B chỉ một buổi nên ở mức giữa.
-    expect([thursday![0], saturday![0], monday![0]]).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST, 0.855]);
+    // Tối Thứ 2 (GV B) · Tối Thứ 5 + Sáng Thứ 7 (GV A): GV A xếp trước theo mã nên nhận tông vàng, GV B tông xanh dương.
+    const [monday, classA] = await headers();
+    expect([monday![2], classA![2]]).toEqual([255, 75]);
+    // Mỗi giáo viên chỉ một khung (hai buổi của GV A đã gom) nên đều ở mức giữa.
+    expect([monday![0], classA![0]]).toEqual([0.855, 0.855]);
 
-    // Dạy thay: buổi mang màu của người thực dạy (GV B giờ có hai buổi, GV A còn một).
+    // Dạy thay: khung mang màu của người thực dạy (GV B giờ có hai khung: nhạt nhất rồi đậm nhất; GV A còn một).
     await hold({ classId: f.classA.id, date: "2026-01-17", teacherId: f.teacherA.id, substituteTeacherId: f.teacherB.id });
     await hold({ classId: f.classA.id, date: "2026-01-15", teacherId: f.teacherA.id });
     expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7|A"]);
@@ -108,11 +143,22 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
       [ROSTER_DARKEST, expect.any(Number), 255],
     ]);
 
-    // Ba buổi của cùng một giáo viên xếp xen kẽ: nhạt nhất, đậm nhất, rồi mức giữa.
+    // Thêm một buổi của GV B ở cùng lớp A: gom vào khung sẵn có, số khung và màu không đổi.
     await hold({ classId: f.classA.id, date: "2026-01-18", teacherId: f.teacherB.id });
-    const ofB = (await headers()).filter(([, , hue]) => hue === 255).map(([lightness]) => lightness);
-    expect(ofB).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST, 0.855]);
+    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7 + Tối Chủ nhật|A"]);
+    const ofB = async () => (await headers()).filter(([, , hue]) => hue === 255).map(([lightness]) => lightness);
+    expect(await ofB()).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST]);
     await db.delete(sessions).where(eq(sessions.date, "2026-01-18"));
+
+    // Ba khung của cùng một giáo viên (ba lớp) xếp xen kẽ: nhạt nhất, đậm nhất, rồi mức giữa.
+    const [third] = await db
+      .insert(classes)
+      .values({ code: "C", name: "Lớp C", startDate: "2026-01-06", endDate: "2026-03-31", maxSize: 8 })
+      .returning();
+    await hold({ classId: third!.id, date: "2026-01-18", teacherId: f.teacherB.id });
+    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7|A", "Tối Chủ nhật|C"]);
+    expect(await ofB()).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST, 0.855]);
+    await db.delete(classes).where(eq(classes.id, third!.id));
 
     // Buổi chưa có giáo viên (lớp không có GV chính, lịch mẫu không ghi giáo viên): xám trung tính.
     await db.delete(classTeachers).where(eq(classTeachers.classId, f.classB.id));
@@ -140,7 +186,7 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     await hold({ classId: lend!.id, date: "2026-01-13" });
     await hold({ classId: f.classB.id, date: "2026-01-13" });
     const { blocks, unscheduled } = await roster();
-    expect(blocks.map((b) => `${b.label}|${b.classCode}`)).toEqual(["Tối Thứ 5|A", "Sáng Thứ 7|A"]);
+    expect(blocks.map(title)).toEqual(["Tối Thứ 5 + Sáng Thứ 7|A"]);
     expect(unscheduled).toEqual([{ id: fresh!.id, code: "M", name: "Lớp mới" }]);
   });
 
