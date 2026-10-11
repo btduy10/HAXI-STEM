@@ -1,7 +1,7 @@
 "use server";
 
 import { idOnly } from "@/lib/validation/common";
-import { awardInput, criteriaInput, criteriaUpdate, deleteStarLogsInput, undoInput } from "@/lib/validation/stars";
+import { awardInput, criteriaInput, criteriaUpdate, undoInput } from "@/lib/validation/stars";
 import { runAction } from "../action";
 import * as stars from "../services/stars";
 
@@ -17,4 +17,3 @@ export const deleteCriteriaAction = async (input: unknown) =>
 // Dùng chung cho Admin và GV: service kiểm tra quyền trên buổi học / học viên.
 export const awardStarsAction = async (input: unknown) => runAction(awardInput, input, (a, d) => stars.awardStars(a, d), ALL);
 export const undoStarAction = async (input: unknown) => runAction(undoInput, input, (a, d) => stars.undoStarLog(a, d.logId), ALL);
-export const deleteStarLogsAction = async (input: unknown) => runAction(deleteStarLogsInput, input, stars.deleteStudentStarLogs, ALL);

@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { appSettings, attendances, auditLogs, classes, sessions, starCriteria, starLogs, students } from "@/db/schema";
+import { appSettings, attendances, auditLogs, sessions, starCriteria, starLogs, students } from "@/db/schema";
 import { DEFAULT_PERMISSIONS } from "@/lib/permissions";
 import * as stars from "@/server/services/stars";
 import { type Fixture, resetDb, seedFixture } from "./helpers";
@@ -97,7 +97,8 @@ describe("hồ sơ học viên", () => {
       ["2026-01-06", "present", 3],
     ]);
     expect(profile.gifts).toEqual([]);
-    expect(Object.keys(profile).sort()).toEqual(["attendance", "gifts", "logs", "student"]);
+    // Hồ sơ không còn danh sách từng lần ghi sao (sao hiện theo buổi học).
+    expect(Object.keys(profile).sort()).toEqual(["attendance", "gifts", "student"]);
 
     await expect(stars.getStudentStarProfile(f.actorB, a1())).rejects.toMatchObject({ code: "NOT_FOUND" });
     // GV B được xếp dạy một buổi của lớp A → xem được hồ sơ học viên lớp A.
@@ -111,46 +112,6 @@ describe("hồ sơ học viên", () => {
     await expect(stars.getStudentStarProfile(f.actorB, a1())).resolves.toBeDefined();
     await db.update(sessions).set({ date: "2026-01-20" }).where(eq(sessions.substituteTeacherId, f.teacherB.id));
     await expect(stars.getStudentStarProfile(f.actorB, a1())).rejects.toMatchObject({ code: "NOT_FOUND" });
-  });
-});
-
-describe("Admin xóa hẳn lịch sử sao", () => {
-  const logsOf = async (studentId: string) => (await db.select().from(starLogs).where(eq(starLogs.studentId, studentId))).map((l) => l.stars).sort((x, y) => x - y);
-
-  it("chỉ Admin; xóa một lần ghi thì xóa cả cặp ghi–hoàn tác, tổng sao tính lại", async () => {
-    await give("+20", [a1(), a2()]);
-    await give("+3", [a1()]);
-    const [plus3] = await db.select().from(starLogs).where(sql`${starLogs.studentId} = ${a1()} and ${starLogs.stars} = 3`);
-    await stars.undoStarLog(f.actorA, plus3!.id, now);
-    const [reversal] = await db.select().from(starLogs).where(eq(starLogs.reversesLogId, plus3!.id));
-    await expect(stars.deleteStudentStarLogs(f.actorA, { studentId: a1(), logId: plus3!.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    // Lần ghi của học viên khác không xóa được qua hồ sơ của em này.
-    await expect(stars.deleteStudentStarLogs(f.admin, { studentId: a2(), logId: plus3!.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
-
-    // Chọn bản ghi hoàn tác → xóa cả lần ghi gốc.
-    expect(await stars.deleteStudentStarLogs(f.admin, { studentId: a1(), logId: reversal!.id })).toMatchObject({ deleted: 2 });
-    expect(await logsOf(a1())).toEqual([20]);
-    expect(await total(a1())).toBe(20);
-
-    const [plus20] = await db.select().from(starLogs).where(eq(starLogs.studentId, a1()));
-    await stars.deleteStudentStarLogs(f.admin, { studentId: a1(), logId: plus20!.id });
-    expect(await logsOf(a1())).toEqual([]);
-    expect(await total(a1())).toBe(0);
-    expect(await logsOf(a2())).toEqual([20]); // học viên khác không bị đụng tới
-  });
-
-  it("xóa hết giữ lại sao của lớp đã đóng", async () => {
-    await give("+20", [a1()]);
-    await give("+3", [a1()], f.actorA, sessionA2);
-    const [closedSession] = await db.insert(sessions).values({ classId: f.classB.id, date: "2026-01-07", startTime: "08:00", endTime: "09:30" }).returning();
-    const [closedLog] = await db.insert(starLogs).values({ sessionId: closedSession!.id, studentId: a1(), stars: 5 }).returning();
-    await db.update(classes).set({ status: "closed" }).where(eq(classes.id, f.classB.id));
-
-    await expect(stars.deleteStudentStarLogs(f.admin, { studentId: a1(), logId: closedLog!.id })).rejects.toMatchObject({ code: "CONFLICT" });
-    expect(await stars.deleteStudentStarLogs(f.admin, { studentId: a1() })).toEqual({ deleted: 2, keptClosed: 1 });
-    expect(await logsOf(a1())).toEqual([5]);
-    const [entry] = await db.select().from(auditLogs).where(eq(auditLogs.action, "star_logs_deleted_all"));
-    expect(entry?.recordId).toBe(a1());
   });
 });
 

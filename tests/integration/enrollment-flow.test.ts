@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attendances, auditLogs, classes, enrollments, makeupAssignments, sessions, starCriteria, starLogs, students, tuitionReceipts } from "@/db/schema";
+import { attendances, auditLogs, classes, enrollments, makeupAssignments, sessionStudents, sessions, starCriteria, starLogs, students, tuitionReceipts } from "@/db/schema";
 import { DEFAULT_PERMISSIONS, type RolePermissions } from "@/lib/permissions";
 import { newEnrollmentInput } from "@/lib/validation/entities";
 import type { Actor } from "@/server/guard";
@@ -409,5 +409,75 @@ describe("QL Học viên: chương trình đã học, lịch sử buổi học, 
     const own = await historySvc.listStudentsPageWithStars(withMenus(f.actorA, { students: ALL }, "own"), undefined, 1);
     expect(own.rows.map((s) => `${s.code}:${s.phone}`)).toEqual(["A1:null", "A2:null"]);
     expect(await db.select().from(attendances).where(and(eq(attendances.sessionId, absent.id), eq(attendances.studentId, a2())))).toHaveLength(1);
+  });
+});
+
+describe("lịch học sắp tới trong hồ sơ học viên", () => {
+  const schedule = async (studentId: string, actor: Actor = f.admin) =>
+    (await historySvc.getStudentSchedule(actor, studentId, TODAY)).map((s) => `${s.date} ${s.classCode}${s.makeup ? " bù" : s.kind === "makeup" ? " buổi bù" : ""}`);
+  const b1 = () => f.students[2]!.id;
+
+  it("gồm buổi chưa dạy theo lịch của lớp em đang học và buổi học bù đã xếp ở Ghi danh, theo thứ tự ngày", async () => {
+    // Buổi đã dạy, buổi đã qua ngày, buổi đã hủy không nằm trong lịch.
+    expect(await schedule(a1())).toEqual(["2026-01-20 A"]);
+    expect(await schedule(b1())).toEqual(["2026-01-15 B", "2026-01-22 B"]);
+    await db.update(sessions).set({ status: "cancelled" }).where(eq(sessions.id, later.id));
+    expect(await schedule(b1())).toEqual(["2026-01-15 B"]);
+
+    await assign(target.id);
+    expect(await schedule(a1())).toEqual(["2026-01-15 B bù", "2026-01-20 A"]);
+    const [makeup, regular] = await historySvc.getStudentSchedule(f.admin, a1(), TODAY);
+    expect(makeup).toMatchObject({
+      sessionId: target.id,
+      startTime: "18:00:00",
+      endTime: "19:30:00",
+      className: f.classB.name,
+      teacherName: f.teacherB.shortName || f.teacherB.fullName,
+      makeup: true,
+      absentDate: "2026-01-06",
+      absentClassCode: "A",
+    });
+    expect(regular).toMatchObject({ sessionId: ownNext.id, makeup: false, absentDate: null, absentClassCode: null });
+    // Hủy xếp bù thì buổi đó rời lịch của em.
+    const [assignment] = await db.select().from(makeupAssignments);
+    await makeupSvc.cancelMakeup(f.admin, assignment!.id);
+    expect(await schedule(a1())).toEqual(["2026-01-20 A"]);
+  });
+
+  it("chỉ trong 28 ngày tới; chỉ khi em còn ghi danh vào ngày học; giáo viên dạy thay được hiện thay giáo viên của buổi", async () => {
+    await db.insert(sessions).values([
+      { classId: f.classA.id, date: "2026-02-10", startTime: "18:00", endTime: "19:30", teacherId: f.teacherA.id, substituteTeacherId: f.teacherB.id },
+      { classId: f.classA.id, date: "2026-02-11", startTime: "18:00", endTime: "19:30", teacherId: f.teacherA.id },
+    ]);
+    expect(await schedule(a1())).toEqual(["2026-01-20 A", "2026-02-10 A"]);
+    const rows = await historySvc.getStudentSchedule(f.admin, a1(), TODAY);
+    expect(rows[1]!.teacherName).toBe(f.teacherB.shortName || f.teacherB.fullName);
+
+    // Rời lớp từ 10/02: buổi từ ngày đó không còn trong lịch. Lớp đóng thì không còn lịch.
+    const [enrollment] = await db.select().from(enrollments).where(eq(enrollments.studentId, a1()));
+    await classSvc.leaveEnrollment(f.admin, { id: enrollment!.id, leftAt: "2026-02-10" });
+    expect(await schedule(a1())).toEqual(["2026-01-20 A"]);
+    await db.update(classes).set({ status: "closed" }).where(eq(classes.id, f.classA.id));
+    expect(await schedule(a1())).toEqual([]);
+    // Em chưa thuộc lớp nào: lịch trống.
+    expect(await schedule(f.students[4]!.id)).toEqual([]);
+  });
+
+  it("buổi bù mở riêng cho lớp chỉ có trong lịch của em được chọn", async () => {
+    const [extra] = await db
+      .insert(sessions)
+      .values({ classId: f.classA.id, date: "2026-01-17", startTime: "08:00", endTime: "09:30", teacherId: f.teacherA.id, kind: "makeup" })
+      .returning();
+    await db.insert(sessionStudents).values({ sessionId: extra!.id, studentId: a2() });
+    expect(await schedule(a2())).toEqual(["2026-01-17 A buổi bù", "2026-01-20 A"]);
+    expect(await schedule(a1())).toEqual(["2026-01-20 A"]);
+  });
+
+  it("theo quyền xem học viên: giáo viên lớp khác không xem được; giáo viên của em thấy cả buổi học bù ở lớp khác", async () => {
+    await expect(schedule(a1(), f.actorB)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await assign(target.id);
+    expect(await schedule(a1(), f.actorA)).toEqual(["2026-01-15 B bù", "2026-01-20 A"]);
+    // Giáo viên của buổi học bù xem được hồ sơ và lịch của em học ghép.
+    expect(await schedule(a1(), f.actorB)).toEqual(["2026-01-15 B bù", "2026-01-20 A"]);
   });
 });

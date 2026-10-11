@@ -48,7 +48,7 @@ export async function starTotalsOf(tx: DbOrTx, studentIds: string[]): Promise<Ma
   return new Map([...sums].map(([id, sum]) => [id, clampTotal(sum)]));
 }
 
-// ---------- Ngoại lệ của sổ cái chỉ-thêm: Admin xóa hẳn lịch sử sao ----------
+// ---------- Ngoại lệ của sổ cái chỉ-thêm: xóa sao theo ghi danh, buổi học hoặc học viên bị Admin xóa hẳn ----------
 
 /** Xóa các dòng sao theo id (kèm bản ghi hoàn tác trỏ tới chúng). Trả về số dòng đã xóa. */
 async function purgeLogs(tx: Tx, actor: Actor, studentId: string, ids: string[]): Promise<number> {
@@ -91,41 +91,6 @@ export async function purgeSessionStarLogs(tx: Tx, actor: Actor, sessionId: stri
   let deleted = 0;
   for (const [studentId, ids] of byStudent) deleted += await purgeLogs(tx, actor, studentId, ids);
   return deleted;
-}
-
-/**
- * Admin xóa hẳn lịch sử sao của một học viên: một lần ghi (`logId`, xóa cả cặp ghi–hoàn tác) hoặc toàn bộ.
- * Sao thuộc lớp đã đóng được giữ lại vì tổng kết của lớp đã chốt theo số liệu đó.
- */
-export async function deleteStudentStarLogs(actor: Actor, data: { studentId: string; logId?: string }) {
-  assertAdmin(actor);
-  return db.transaction(async (tx) => {
-    const rows = await tx
-      .select({ id: starLogs.id, reversesLogId: starLogs.reversesLogId, stars: starLogs.stars, classStatus: classes.status })
-      .from(starLogs)
-      .leftJoin(sessions, eq(sessions.id, starLogs.sessionId))
-      .leftJoin(classes, eq(classes.id, sessions.classId))
-      .where(eq(starLogs.studentId, data.studentId));
-    let targets = rows.filter((r) => r.classStatus !== "closed");
-    if (data.logId) {
-      const picked = rows.find((r) => r.id === data.logId);
-      if (!picked) throw notFound("lần ghi sao");
-      if (picked.classStatus === "closed") throw new AppError("CONFLICT", "Lớp đã đóng và đã chốt tổng kết nên không xóa được sao của lớp này.");
-      // Chọn bản ghi hoàn tác thì xóa cả lần ghi gốc; chọn lần ghi gốc thì purgeLogs xóa cả bản hoàn tác.
-      targets = rows.filter((r) => r.id === picked.id || r.id === picked.reversesLogId);
-    }
-    const deleted = await purgeLogs(tx, actor, data.studentId, targets.map((t) => t.id));
-    if (deleted > 0) {
-      await audit(tx, {
-        userId: actor.userId,
-        action: data.logId ? "star_log_deleted" : "star_logs_deleted_all",
-        tableName: "star_logs",
-        recordId: data.logId ?? data.studentId,
-        newValue: { studentId: data.studentId, deleted },
-      });
-    }
-    return { deleted, keptClosed: data.logId ? 0 : rows.length - targets.length };
-  });
 }
 
 // ---------- Tiêu chí sao (Admin quản lý, GV dùng) ----------
@@ -388,9 +353,8 @@ export async function getStudentStarProfile(actor: Actor, studentId: string) {
   const allowed = await allowedClassIds(actor);
   const inScope = (column: typeof sessions.classId | typeof courseSummaries.classId) =>
     allowed === null ? undefined : allowed.length === 0 ? sql`false` : inArray(column, allowed);
-  const [[student], logs, attendance, giftRows] = await Promise.all([
+  const [[student], attendance, giftRows] = await Promise.all([
     db.select({ id: students.id, code: students.code, fullName: students.fullName }).from(students).where(eq(students.id, studentId)).limit(1),
-    logQuery().where(eq(starLogs.studentId, studentId)).orderBy(desc(starLogs.recordedAt), desc(starLogs.id)).limit(100),
     db
       .select({
         sessionId: sessions.id,
@@ -421,7 +385,7 @@ export async function getStudentStarProfile(actor: Actor, studentId: string) {
       .where(and(eq(courseSummaries.studentId, studentId), inScope(courseSummaries.classId)))
       .orderBy(desc(courseSummaries.finalizedAt)),
   ]);
-  return { student: student!, logs, attendance, gifts: giftRows };
+  return { student: student!, attendance, gifts: giftRows };
 }
 
 /** Sổ cái gần đây: toàn trung tâm, hoặc chỉ các lớp trong phạm vi của người xem. */

@@ -511,6 +511,15 @@ test("Ghi danh: học viên mới với mã tự cấp, danh sách chờ lớp, 
 
     // QL Học viên: hồ sơ có chương trình đã học và lịch sử buổi học kèm tên bài; danh sách có cột Sao.
     await page.goto(`/admin/students/${student!.id}`);
+    // Lịch học: buổi học bù đã xếp ở Ghi danh (hôm nay, lớp HC-E2E) có nhãn Học bù kèm buổi vắng được bù.
+    await expect(page.getByRole("heading", { name: /^Lịch học/ })).toBeVisible();
+    const makeupRow = page.locator('[data-schedule="HC-E2E"]');
+    await expect(makeupRow).toHaveCount(1);
+    await expect(makeupRow).toContainText("18h00 – 19h30");
+    await expect(makeupRow).toContainText("Lớp HC-E2E – Lớp nhận học bù");
+    await expect(makeupRow).toContainText("Bù buổi vắng");
+    await expect(makeupRow.getByText("Học bù", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Lịch sử ghi sao/ })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Chương trình đã học" })).toBeVisible();
     await expect(page.getByText(/Lớp HB-E2E – Lớp thử học bù/)).toBeVisible();
     await expect(page.getByRole("heading", { name: /Lịch sử buổi học/ })).toBeVisible();

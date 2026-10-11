@@ -2,22 +2,27 @@ import { BackLink } from "@/components/back-link";
 import { ConfirmButton, FormDialogButton } from "@/components/action-buttons";
 import { Badge } from "@/components/ui/badge";
 import { MAKEUP_STATE_LABELS } from "@/domain/makeup";
+import { rosterTime } from "@/domain/roster";
+import { WEEKDAY_SHORT, isoWeekday } from "@/lib/dates";
 import { LABELS, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { cancelRedemptionAction, redeemGiftAction } from "@/server/actions/rewards";
-import { deleteStarLogsAction } from "@/server/actions/stars";
 import type { Actor } from "@/server/guard";
 import { orNotFound } from "@/server/page";
 import { getRedemptionInfo } from "@/server/services/redemptions";
 import { getStudentStarProfile } from "@/server/services/stars";
-import { getStudentLearningHistory } from "@/server/services/student-history";
+import { STUDENT_SCHEDULE_DAYS, getStudentLearningHistory, getStudentSchedule } from "@/server/services/student-history";
 
-/** Hồ sơ học viên: sao, quà, chương trình đã học và lịch sử buổi học; dùng chung cho Admin và GV (service kiểm tra quyền). */
+/** Hồ sơ học viên: sao, lịch học sắp tới, quà, chương trình đã học và lịch sử buổi học; dùng chung cho Admin và GV (service kiểm tra quyền). */
 export async function StudentStarProfile({ actor, studentId, backHref }: { actor: Actor; studentId: string; backHref: string }) {
   const profile = await orNotFound(getStudentStarProfile(actor, studentId));
   const { student } = profile;
   // getStudentStarProfile đã kiểm tra quyền xem học viên này.
-  const [redemption, history] = await Promise.all([getRedemptionInfo(actor, studentId), getStudentLearningHistory(actor, studentId)]);
+  const [redemption, history, schedule] = await Promise.all([
+    getRedemptionInfo(actor, studentId),
+    getStudentLearningHistory(actor, studentId),
+    getStudentSchedule(actor, studentId),
+  ]);
   const admin = actor.role === "admin";
   const attended = history.sessions.filter((a) => a.attended).length;
 
@@ -41,6 +46,47 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
           ))}
         </dl>
       </div>
+
+      <section className="grid gap-2" aria-labelledby="schedule-title">
+        <h2 id="schedule-title" className="font-medium">
+          Lịch học <span className="text-sm font-normal text-muted-foreground">({STUDENT_SCHEDULE_DAYS} ngày tới)</span>
+        </h2>
+        {schedule.length === 0 ? (
+          <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">
+            Chưa có buổi học nào trong {STUDENT_SCHEDULE_DAYS} ngày tới.
+          </p>
+        ) : (
+          <ul className="grid gap-1.5">
+            {schedule.map((s) => (
+              <li
+                key={s.sessionId}
+                data-schedule={s.classCode}
+                className="flex flex-wrap items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm"
+              >
+                <span className="min-w-0">
+                  <span className="font-medium">
+                    {WEEKDAY_SHORT[isoWeekday(s.date)]} {formatDate(s.date)} · {rosterTime(s.startTime)} – {rosterTime(s.endTime)}
+                  </span>
+                  <span className="block text-xs break-words text-muted-foreground">
+                    Lớp {s.classCode} – {s.className}
+                    {s.teacherName && ` · ${s.teacherName}`}
+                    {s.roomName && ` · ${s.roomName}`}
+                  </span>
+                  {s.makeup && (
+                    <span className="block text-xs text-muted-foreground">
+                      Bù buổi vắng {formatDate(s.absentDate)} · {s.absentClassCode}
+                    </span>
+                  )}
+                </span>
+                {/* Học bù: học ghép đã xếp ở Ghi danh. Buổi bù: buổi mở riêng cho lớp. */}
+                <Badge variant={s.makeup || s.kind === "makeup" ? "secondary" : "outline"}>
+                  {s.makeup ? "Học bù" : s.kind === "makeup" ? "Buổi bù" : "Theo lịch"}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <section className="grid gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -182,58 +228,6 @@ export async function StudentStarProfile({ actor, studentId, backHref }: { actor
         )}
       </section>
 
-      <section className="grid gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-medium">
-            Lịch sử ghi sao <span className="text-sm font-normal text-muted-foreground">({profile.logs.length} lần gần nhất)</span>
-          </h2>
-          {/* Chỉ Admin xóa hẳn lịch sử sao (ghi nhầm, dữ liệu thử); máy chủ kiểm tra lại. */}
-          {admin && profile.logs.length > 0 && (
-            <ConfirmButton
-              label="Xóa hết"
-              variant="destructive"
-              className="h-9"
-              confirmText={`Xóa hẳn toàn bộ lịch sử sao của ${student.fullName}? Tổng sao được tính lại. Sao thuộc lớp đã đóng được giữ. Không hoàn tác được.`}
-              action={deleteStarLogsAction}
-              input={{ studentId }}
-              successMessage="Đã xóa lịch sử sao."
-            />
-          )}
-        </div>
-        {profile.logs.length === 0 ? (
-          <p className="rounded-2xl border border-dashed p-4 text-center text-sm text-muted-foreground">Chưa có lần ghi sao nào.</p>
-        ) : (
-          <ul className="grid gap-1.5">
-            {profile.logs.map((log) => (
-              <li key={log.id} className={cn("flex items-center gap-2 glass-solid rounded-xl border px-3 py-2 text-sm", log.reversed && "opacity-60")}>
-                <span className={cn("w-9 shrink-0 font-semibold tabular-nums", log.stars > 0 ? "text-emerald-600" : "text-red-600")}>
-                  {log.stars > 0 ? `+${log.stars}` : log.stars}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className={cn(log.reversed && "line-through")}>
-                    {log.isReversal ? "Hoàn tác: " : ""}
-                    {log.criteriaName ?? "—"}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {log.classCode ?? ""} {log.sessionDate ? `· buổi ${formatDate(log.sessionDate)}` : ""} · ghi lúc {formatDateTime(log.recordedAt)}
-                    {log.note && !log.isReversal ? ` · ${log.note}` : ""}
-                  </span>
-                </span>
-                {admin && (
-                  <ConfirmButton
-                    label="Xóa"
-                    className="h-9 shrink-0"
-                    confirmText={`Xóa hẳn lần ghi ${log.stars > 0 ? `+${log.stars}` : log.stars} sao này${log.isReversal || log.reversed ? " (cùng lần ghi/hoàn tác đi kèm)" : ""}? Không hoàn tác được.`}
-                    action={deleteStarLogsAction}
-                    input={{ studentId, logId: log.id }}
-                    successMessage="Đã xóa lần ghi sao."
-                  />
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   );
 }

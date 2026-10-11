@@ -1,8 +1,10 @@
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, between, desc, eq, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "@/db";
-import { attendances, classes, courses, enrollments, makeupAssignments, sessions } from "@/db/schema";
+import { attendances, classes, courses, enrollments, makeupAssignments, rooms, sessionStudents, sessions, teachers } from "@/db/schema";
 import { isAbsence, makeupState } from "@/domain/makeup";
+import { addDays } from "@/lib/dates";
+import { todayIso } from "@/lib/format";
 import { type Actor, allowedClassIds } from "../guard";
 import { assertStudentAccess, starTotalsOf } from "./stars";
 import { listStudentsPage } from "./students";
@@ -11,6 +13,70 @@ const madeUpIn = alias(makeupAssignments, "made_up_in");
 const makeupSession = alias(sessions, "makeup_session");
 const makeupAttendance = alias(attendances, "makeup_attendance");
 const guestOf = alias(makeupAssignments, "guest_of");
+const substituteTeacher = alias(teachers, "substitute");
+const absentSession = alias(sessions, "absent_session");
+const absentClass = alias(classes, "absent_class");
+
+/** Lịch học trong hồ sơ học viên hiện các buổi từ hôm nay đến hết số ngày này (cùng khoảng với Xếp bù ở Ghi danh). */
+export const STUDENT_SCHEDULE_DAYS = 28;
+
+/**
+ * Lịch học sắp tới của một học viên theo Thời khóa biểu, từ hôm nay đến hết `STUDENT_SCHEDULE_DAYS` ngày tới:
+ * - buổi chưa dạy của các lớp đang mở mà em có ghi danh hiệu lực vào ngày đó (buổi bù riêng của lớp chỉ tính khi em được chọn);
+ * - buổi học bù đã xếp ở Ghi danh (học ghép vào buổi của lớp khác), kèm buổi vắng được bù.
+ * Như lịch sử buổi học, người xem được học viên thì thấy lịch ở MỌI lớp của em (chỉ ngày, giờ, lớp, giáo viên, phòng).
+ */
+export async function getStudentSchedule(actor: Actor, studentId: string, today: string = todayIso()) {
+  await assertStudentAccess(actor, studentId);
+  const upcoming = and(eq(sessions.status, "planned"), eq(classes.status, "open"), between(sessions.date, today, addDays(today, STUDENT_SCHEDULE_DAYS)));
+  const columns = {
+    sessionId: sessions.id,
+    date: sessions.date,
+    startTime: sessions.startTime,
+    endTime: sessions.endTime,
+    kind: sessions.kind,
+    classCode: classes.code,
+    className: classes.name,
+    // Người thực dạy: giáo viên dạy thay nếu có; tên viết tắt nếu có.
+    teacherName: sql<string | null>`coalesce(nullif(${substituteTeacher.shortName}, ''), ${substituteTeacher.fullName}, nullif(${teachers.shortName}, ''), ${teachers.fullName})`,
+    roomName: rooms.name,
+  };
+  const enrolledOnDate = sql`exists (
+    select 1 from ${enrollments}
+    where ${enrollments.classId} = ${sessions.classId} and ${enrollments.studentId} = ${studentId}
+      and ${sessions.date} >= ${enrollments.joinedAt} and (${enrollments.leftAt} is null or ${sessions.date} < ${enrollments.leftAt})
+  )`;
+  const pickedForMakeup = sql`exists (
+    select 1 from ${sessionStudents} where ${sessionStudents.sessionId} = ${sessions.id} and ${sessionStudents.studentId} = ${studentId}
+  )`;
+  const [own, guest] = await Promise.all([
+    db
+      .select(columns)
+      .from(sessions)
+      .innerJoin(classes, eq(classes.id, sessions.classId))
+      .leftJoin(teachers, eq(teachers.id, sessions.teacherId))
+      .leftJoin(substituteTeacher, eq(substituteTeacher.id, sessions.substituteTeacherId))
+      .leftJoin(rooms, eq(rooms.id, sessions.roomId))
+      .where(and(upcoming, or(and(eq(sessions.kind, "regular"), enrolledOnDate), and(eq(sessions.kind, "makeup"), pickedForMakeup)))),
+    db
+      .select({ ...columns, absentDate: absentSession.date, absentClassCode: absentClass.code })
+      .from(makeupAssignments)
+      .innerJoin(sessions, eq(sessions.id, makeupAssignments.makeupSessionId))
+      .innerJoin(classes, eq(classes.id, sessions.classId))
+      .innerJoin(absentSession, eq(absentSession.id, makeupAssignments.absentSessionId))
+      .innerJoin(absentClass, eq(absentClass.id, absentSession.classId))
+      .leftJoin(teachers, eq(teachers.id, sessions.teacherId))
+      .leftJoin(substituteTeacher, eq(substituteTeacher.id, sessions.substituteTeacherId))
+      .leftJoin(rooms, eq(rooms.id, sessions.roomId))
+      .where(and(eq(makeupAssignments.studentId, studentId), upcoming)),
+  ]);
+  const guestIds = new Set(guest.map((g) => g.sessionId));
+  return [
+    // `makeup`: em học buổi này để bù một buổi vắng (học ghép); khi đó có ngày và lớp của buổi vắng.
+    ...guest.map((g) => ({ ...g, makeup: true as const })),
+    ...own.filter((o) => !guestIds.has(o.sessionId)).map((o) => ({ ...o, makeup: false as const, absentDate: null, absentClassCode: null })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.classCode.localeCompare(b.classCode, "vi"));
+}
 
 /**
  * Lịch sử học của một học viên, để giáo viên biết em đã học gì và không dạy trùng chương trình:

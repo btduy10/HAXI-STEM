@@ -65,7 +65,11 @@ test("GV ghi sao trên điện thoại: một em, cả lớp, giới hạn trừ
   await page.goto(`/teacher/students/${studentId}`);
   await expect(page.getByRole("heading", { name: new RegExp(STUDENT) })).toBeVisible();
   await expect(page.getByText("Tổng sao tích lũy")).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Lịch sử ghi sao/ })).toBeVisible();
+  // Có mục Lịch học; không còn mục Lịch sử ghi sao và các nút xóa sao (sao hiện theo từng buổi ở Lịch sử buổi học).
+  await expect(page.getByRole("heading", { name: /^Lịch học/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Lịch sử buổi học/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Lịch sử ghi sao/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Xóa hết" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Avatar" })).toHaveCount(0);
   await expect(page.getByRole("img", { name: /^Avatar / })).toHaveCount(0);
   await expect(page.getByRole("progressbar")).toHaveCount(0);
