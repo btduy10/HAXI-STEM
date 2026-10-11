@@ -1,6 +1,6 @@
 import { SLOT_NAMES, SLOT_NAME_LABELS } from "@/lib/validation/entities";
 
-// Bảng tổng quan Ghi danh theo buổi học trong tuần (buổi = ca + thứ, lấy từ Thời khóa biểu của tuần; không có thì từ lịch mẫu).
+// Bảng tổng quan Ghi danh theo buổi học trong tuần (buổi = ca + thứ, lấy từ lịch mẫu của lớp).
 
 /** Số hàng tối thiểu của mỗi lớp trên bảng tổng quan; lớp đông hơn thì hiện đủ học viên. */
 export const ROSTER_ROWS = 8;
@@ -16,11 +16,6 @@ export function rosterSessionLabel(slotName: string, weekday: number): string {
 
 /** Giờ trên tiêu đề buổi: "19:00:00" → "19h00". */
 export const rosterTime = (time: string) => time.slice(0, 5).replace(":", "h");
-
-/** Ca của buổi xếp giờ tự do (không gắn ca), suy theo giờ bắt đầu: trước 12:00 là Sáng, trước 17:00 là Chiều, còn lại là Tối. */
-export function shiftOfTime(startTime: string): (typeof SLOT_NAMES)[number] {
-  return startTime < "12:00" ? SLOT_NAMES[0] : startTime < "17:00" ? SLOT_NAMES[1] : SLOT_NAMES[2];
-}
 
 const shiftIndex = (slotName: string) => (SLOT_NAMES as readonly string[]).indexOf(slotName);
 

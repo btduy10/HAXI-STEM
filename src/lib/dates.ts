@@ -17,6 +17,12 @@ export function isoWeekday(iso: string): number {
 export const startOfWeek = (iso: string) => addDays(iso, 1 - isoWeekday(iso));
 export const startOfMonth = (iso: string) => `${iso.slice(0, 7)}-01`;
 
+/** Tuần sau của ngày `today`: Thứ Hai đến Chủ nhật của tuần kế tiếp tuần chứa `today`. */
+export function nextWeekRange(today: string): { from: string; to: string } {
+  const from = addDays(startOfWeek(today), 7);
+  return { from, to: addDays(from, 6) };
+}
+
 export function addMonths(iso: string, months: number): string {
   const d = toUtc(startOfMonth(iso));
   d.setUTCMonth(d.getUTCMonth() + months);

@@ -261,20 +261,42 @@ test("Admin: TKB có bộ lọc, sửa giờ riêng một buổi, trùng lịch 
   const logs = await db`select action from audit_logs where action in ('attendance_unlocked', 'attendance_updated', 'session_updated', 'session_cancelled')`;
   expect(new Set(logs.map((l) => l.action)).size).toBe(4);
 
-  // Trang lớp: lịch mẫu + sinh lại buổi (không tạo trùng) + thêm buổi bù chỉ cho học viên được chọn.
+  // Trang lớp: lịch mẫu + sinh buổi tuần sau (không tạo trùng) + thêm buổi bù chỉ cho học viên được chọn.
   const [cls] = await db`select id from classes where code = 'RB-CB01'`;
   await db.end();
   await page.goto(`/admin/classes/${cls!.id}`);
   await expect(page.getByRole("heading", { name: /Lịch mẫu hằng tuần/ })).toBeVisible();
   await expect(visibleText(page, "Thứ Ba")).toBeVisible();
   await expectNoHorizontalScroll(page);
-  // Nút xếp lại lịch hỏi xác nhận trước.
-  page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "Sinh buổi học từ lịch mẫu" }).click();
-  // Xếp lại các buổi chưa dạy theo lịch mẫu cho cả thời gian của lớp, giữ các buổi đã dạy; không còn giới hạn theo số buổi của khóa học.
-  await expect(page.getByText(/Lớp có \d+ buổi \(giữ \d+ buổi đã dạy\)/)).toBeVisible();
+  // Buổi học sinh theo từng tuần: trang lớp ghi tuần sẽ sinh và số buổi lớp đã có trong tuần đó.
+  await expect(page.locator("[data-next-week]")).toContainText(/Tuần sau \(\d{2}\/\d{2}\/\d{4} – \d{2}\/\d{2}\/\d{4}\): đã có \d+ buổi\./);
+  await expect(page.getByRole("button", { name: "Sinh buổi học từ lịch mẫu" })).toHaveCount(0);
   await expect(page.getByText(/buổi theo khóa học|Còn thiếu \d+ buổi/)).toHaveCount(0);
   await page.screenshot({ path: "test-results/shots/class-detail-360.png", fullPage: true });
+  // Nút sinh buổi tuần sau hỏi xác nhận trước; xếp lại các buổi chưa dạy của tuần sau rồi mở Thời khóa biểu ở tuần đó, lọc theo lớp.
+  const weekSessions = () => {
+    const db2 = sql();
+    return db2`
+      select count(*)::int as n from sessions
+      where class_id = ${cls!.id} and status <> 'cancelled'
+        and date >= date_trunc('week', now() at time zone 'Asia/Ho_Chi_Minh')::date + 7
+        and date <= date_trunc('week', now() at time zone 'Asia/Ho_Chi_Minh')::date + 13`.finally(() => db2.end());
+  };
+  const [{ n: beforeCount }] = (await weekSessions()) as unknown as [{ n: number }];
+  page.once("dialog", (dialog) => {
+    expect(dialog.message()).toContain("Sinh buổi học tuần sau");
+    void dialog.accept();
+  });
+  await page.getByRole("button", { name: "Sinh buổi học tuần sau" }).click();
+  await expect(page.getByText(/Đã tạo \d+ buổi cho tuần \d{2}\/\d{2}\/\d{4} – \d{2}\/\d{2}\/\d{4}\./)).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/admin/timetable\\?view=week&date=\\d{4}-\\d{2}-\\d{2}&classId=${cls!.id}$`));
+  await expect(page.getByLabel("Lọc theo lớp")).toHaveValue(cls!.id as string);
+  // Xếp lại, không tạo trùng: số buổi của tuần sau không đổi.
+  const [{ n: afterCount }] = (await weekSessions()) as unknown as [{ n: number }];
+  expect(afterCount).toBe(beforeCount);
+  expect(afterCount).toBeGreaterThan(0);
+  await expectNoHorizontalScroll(page);
+  await page.goto(`/admin/classes/${cls!.id}`);
 
   await page.getByRole("link", { name: "Thêm buổi bù" }).click();
   await page.getByLabel("Giờ bắt đầu").fill("20:00");

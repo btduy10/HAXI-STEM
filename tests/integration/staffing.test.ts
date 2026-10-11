@@ -1,14 +1,15 @@
 import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attendances, classTeachers, classes, rooms, scheduleTemplates, sessions, teachers, timeSlots } from "@/db/schema";
+import { attendances, classTeachers, classes, rooms, sessions, teachers, timeSlots } from "@/db/schema";
 import { assertClassAccess, assertSessionAccess, type Actor } from "@/server/guard";
 import * as classSvc from "@/server/services/classes";
 import * as svc from "@/server/services/sessions";
 import { type Fixture, resetDb, seedFixture } from "./helpers";
 
-// Lớp A và B: 05/01/2026 → 31/03/2026. "Hôm nay" là Chủ nhật 01/02/2026.
-const now = new Date("2026-02-01T05:00:00Z");
+// Lớp A và B: 06/01/2026 → 31/03/2026.
+// Khoảng sinh buổi dùng trong test: từ 01/02 đến ngày kết thúc của lớp (9 Thứ Ba: 03/02 … 31/03).
+const FROM_FEB = { from: "2026-02-01", to: "2026-03-31" };
 let f: Fixture;
 let morning: typeof timeSlots.$inferSelect;
 let late: typeof timeSlots.$inferSelect;
@@ -46,52 +47,60 @@ const templateInput = (classId: string, extra: Partial<Parameters<typeof svc.cre
   ...extra,
 });
 
-describe("lịch mẫu tự sinh và tự cập nhật thời khóa biểu", () => {
-  it("thêm lịch mẫu là tự có buổi từ hôm nay đến ngày kết thúc của lớp, kèm trợ giảng; trùng lịch trợ giảng thì bỏ qua và báo lại", async () => {
-    const result = await svc.createTemplate(f.admin, templateInput(f.classA.id, { assistantTeacherId: teacherC.id }), now);
+describe("lịch mẫu chỉ có hiệu lực khi sinh lịch", () => {
+  it("thêm lịch mẫu không tự tạo buổi; sinh buổi thì lấy đúng GV chính của lớp và trợ giảng của lịch mẫu, trùng lịch trợ giảng thì bỏ qua", async () => {
+    const row = await svc.createTemplate(f.admin, templateInput(f.classA.id, { assistantTeacherId: teacherC.id }));
+    expect(row).toMatchObject({ classId: f.classA.id, weekday: 2, assistantTeacherId: teacherC.id });
+    expect(await sessionsOf(f.classA.id)).toEqual([]);
+
+    const result = await svc.generateSessions(f.admin, f.classA.id, FROM_FEB);
     const list = await sessionsOf(f.classA.id);
-    // Xếp từ hôm nay đến ngày kết thúc của lớp: Thứ Ba 03/02 → 31/03 là 9 buổi; không xếp quá ngày kết thúc.
     expect(result.created).toBe(9);
-    expect(list.at(-1)!.date).toBe("2026-03-31");
     expect(list.map((s) => s.date)[0]).toBe("2026-02-03");
+    expect(list.at(-1)!.date).toBe("2026-03-31");
     expect(list.every((s) => s.teacherId === f.teacherA.id && s.assistantTeacherId === teacherC.id)).toBe(true);
-    expect(result.notices).toEqual(["Đã tự thêm 9 buổi vào Thời khóa biểu."]);
 
     // Lớp B cùng giờ, khác phòng, nhưng trợ giảng C đang bận ở lớp A → cả 9 buổi trùng bị bỏ qua, không xếp sang tuần sau.
-    const clash = await svc.createTemplate(f.admin, templateInput(f.classB.id, { roomId: lab2.id, assistantTeacherId: teacherC.id }), now);
+    await svc.createTemplate(f.admin, templateInput(f.classB.id, { roomId: lab2.id, assistantTeacherId: teacherC.id }));
+    const clash = await svc.generateSessions(f.admin, f.classB.id, FROM_FEB);
     expect(clash.conflicts).toHaveLength(9);
     expect(await sessionsOf(f.classB.id)).toEqual([]);
-    expect(clash.warnings.join(" ")).toContain("Giáo viên đã có buổi A");
+    expect(clash.conflicts[0]!.reason).toContain("Giáo viên đã có buổi A");
   });
 
-  it("sửa lịch mẫu cập nhật buổi sắp tới; giữ buổi đã điểm danh và phần đã sửa tay; đổi thứ thì sinh lại", async () => {
-    await svc.createTemplate(f.admin, templateInput(f.classA.id), now);
-    const [tpl] = await db.select().from(scheduleTemplates).where(eq(scheduleTemplates.classId, f.classA.id));
-    const [attended, edited] = await sessionsOf(f.classA.id);
+  it("sửa, đổi thứ hoặc xóa dòng lịch mẫu không làm đổi buổi nào đã có trên Thời khóa biểu", async () => {
+    const tpl = await svc.createTemplate(f.admin, templateInput(f.classA.id));
+    await svc.generateSessions(f.admin, f.classA.id, FROM_FEB);
+    const before = await sessionsOf(f.classA.id);
+    expect(before).toHaveLength(9);
+    const [attended] = before;
     await db.insert(attendances).values({ sessionId: attended!.id, studentId: f.students[0]!.id, status: "present" });
-    await db.update(sessions).set({ roomId: lab2.id }).where(eq(sessions.id, edited!.id)); // sửa tay phòng của buổi 10/02
 
-    const result = await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl!.id, timeSlotId: late.id, assistantTeacherId: teacherC.id }, now);
-    // 9 buổi (03/02 → 31/03), trừ 1 buổi đã điểm danh.
-    expect(result.updated).toBe(8);
+    // Đổi ca, thêm trợ giảng.
+    const changed = await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl.id, timeSlotId: late.id, assistantTeacherId: teacherC.id });
+    expect(changed).toMatchObject({ timeSlotId: late.id, assistantTeacherId: teacherC.id });
+    expect(await sessionsOf(f.classA.id)).toEqual(before);
+    // Đổi sang Thứ Năm.
+    await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl.id, weekday: 4, timeSlotId: late.id });
+    expect(await sessionsOf(f.classA.id)).toEqual(before);
+    // Thêm dòng thứ hai.
+    await svc.createTemplate(f.admin, templateInput(f.classA.id, { weekday: 6 }));
+    expect(await sessionsOf(f.classA.id)).toEqual(before);
+    // Xóa dòng lịch mẫu: buổi vẫn còn, chỉ thôi gắn với dòng đó.
+    await svc.deleteTemplate(f.admin, tpl.id);
     const after = await sessionsOf(f.classA.id);
-    expect(after.find((s) => s.id === attended!.id)).toMatchObject({ startTime: "08:00:00", assistantTeacherId: null });
-    expect(after.find((s) => s.id === edited!.id)).toMatchObject({ startTime: "10:00:00", roomId: lab2.id, assistantTeacherId: teacherC.id });
-    expect(after.filter((s) => s.startTime === "10:00:00" && s.roomId === f.room.id)).toHaveLength(7);
+    expect(after.map((s) => [s.id, s.date, s.startTime, s.teacherId])).toEqual(before.map((s) => [s.id, s.date, s.startTime, s.teacherId]));
+    expect(after.every((s) => s.templateId === null)).toBe(true);
 
-    // Đổi sang Thứ Năm: buổi chưa điểm danh được sinh lại vào Thứ Năm; buổi đã điểm danh giữ nguyên.
-    const moved = await svc.updateTemplate(f.admin, { ...templateInput(f.classA.id), id: tpl!.id, weekday: 4, timeSlotId: late.id }, now);
-    expect(moved.created).toBe(8); // 1 buổi đã dạy + 8 Thứ Năm 05/02 … 26/03
-    const days = (await sessionsOf(f.classA.id)).map((s) => s.date);
-    expect(days).toContain(attended!.date);
-    expect(days.filter((d) => d !== attended!.date).every((d) => new Date(`${d}T00:00:00Z`).getUTCDay() === 4)).toBe(true);
+    await expect(svc.updateTemplate(f.actorA, { ...templateInput(f.classA.id), id: tpl.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("trợ giảng phải khác GV chính; sửa từng buổi đổi được GV chính và trợ giảng", async () => {
-    await expect(svc.createTemplate(f.admin, templateInput(f.classA.id, { teacherId: f.teacherA.id, assistantTeacherId: f.teacherA.id }), now)).rejects.toMatchObject({
+    await expect(svc.createTemplate(f.admin, templateInput(f.classA.id, { teacherId: f.teacherA.id, assistantTeacherId: f.teacherA.id }))).rejects.toMatchObject({
       code: "VALIDATION",
     });
-    await svc.createTemplate(f.admin, templateInput(f.classA.id), now);
+    await svc.createTemplate(f.admin, templateInput(f.classA.id));
+    await svc.generateSessions(f.admin, f.classA.id, FROM_FEB);
     const [first] = await sessionsOf(f.classA.id);
     const edit = { id: first!.id, startTime: "08:00", endTime: "09:30", roomId: f.room.id, content: null, note: null };
     await expect(svc.updateSession(f.admin, { ...edit, teacherId: f.teacherA.id, assistantTeacherId: f.teacherA.id })).rejects.toMatchObject({ code: "VALIDATION" });
@@ -102,23 +111,22 @@ describe("lịch mẫu tự sinh và tự cập nhật thời khóa biểu", () 
   });
 });
 
-describe("số buổi theo thời gian của lớp", () => {
-  it("xếp buổi cho mọi tuần đến ngày kết thúc của lớp, không giới hạn theo khóa học; thêm lịch mẫu thứ hai thì có thêm buổi của thứ đó", async () => {
-    // Lớp A học đến 31/03; hôm nay 01/02. Khóa học khai 10 buổi không còn là giới hạn của lớp.
-    const first = await svc.createTemplate(f.admin, templateInput(f.classA.id), now);
-    expect(first.created).toBe(9); // 9 Thứ Ba từ 03/02 đến 31/03
-    expect(first.scheduled).toBe(9);
-    expect(first).not.toHaveProperty("courseSessions");
-    await svc.createTemplate(f.admin, templateInput(f.classA.id, { weekday: 4 }), now);
-    const list = await sessionsOf(f.classA.id);
-    // 9 Thứ Ba + 8 Thứ Năm (05/02 … 26/03), theo thứ tự ngày.
-    expect(list).toHaveLength(17);
-    expect(list.map((s) => s.date).slice(0, 4)).toEqual(["2026-02-03", "2026-02-05", "2026-02-10", "2026-02-12"]);
-    expect(list.at(-1)!.date).toBe("2026-03-31");
-    // Bấm "Sinh buổi" xếp cho cả thời gian của lớp: bổ sung 8 buổi của các tuần trước hôm nay (06/01 … 29/01);
-    // bấm lại không tạo thêm; ngày kết thúc của lớp không đổi.
-    expect((await svc.generateSessions(f.admin, f.classA.id)).created).toBe(8);
-    expect((await sessionsOf(f.classA.id))[0]!.date).toBe("2026-01-06");
+describe("sinh buổi theo khoảng ngày (dữ liệu mẫu)", () => {
+  it("chỉ sinh trong phần giao của khoảng ngày với thời gian học của lớp; không có khoảng thì cả thời gian của lớp; chạy lại không tạo thêm", async () => {
+    await svc.createTemplate(f.admin, templateInput(f.classA.id));
+    await svc.createTemplate(f.admin, templateInput(f.classA.id, { weekday: 4 }));
+    // 01/02 – 14/02: Thứ Ba 03/02, 10/02 và Thứ Năm 05/02, 12/02.
+    const part = await svc.generateSessions(f.admin, f.classA.id, { from: "2026-02-01", to: "2026-02-14" });
+    expect(part.created).toBe(4);
+    expect((await sessionsOf(f.classA.id)).map((s) => s.date)).toEqual(["2026-02-03", "2026-02-05", "2026-02-10", "2026-02-12"]);
+    // Khoảng vượt ngày kết thúc của lớp (31/03): không xếp quá ngày kết thúc.
+    await svc.generateSessions(f.admin, f.classA.id, { from: "2026-03-25", to: "2026-04-30" });
+    expect((await sessionsOf(f.classA.id)).at(-1)!.date).toBe("2026-03-31");
+    // Không có khoảng: cả thời gian của lớp, buổi đầu vào ngày khai giảng 06/01; chạy lại không tạo thêm, ngày kết thúc không đổi.
+    await svc.generateSessions(f.admin, f.classA.id);
+    const all = await sessionsOf(f.classA.id);
+    expect(all[0]!.date).toBe("2026-01-06");
+    expect(all).toHaveLength(25); // 13 Thứ Ba (06/01 … 31/03) + 12 Thứ Năm (08/01 … 26/03)
     expect((await svc.generateSessions(f.admin, f.classA.id)).created).toBe(0);
     expect((await db.select().from(classes).where(eq(classes.id, f.classA.id)))[0]!.endDate).toBe("2026-03-31");
   });
@@ -127,7 +135,8 @@ describe("số buổi theo thời gian của lớp", () => {
 describe("trợ giảng và phân công", () => {
   it("trợ giảng được xếp vào buổi của lớp khác thì thấy lớp đó, vào được buổi và có buổi trong TKB của mình", async () => {
     // C chỉ được phân công ở lớp A; lớp B chưa liên quan.
-    await svc.createTemplate(f.admin, templateInput(f.classB.id), now);
+    await svc.createTemplate(f.admin, templateInput(f.classB.id));
+    await svc.generateSessions(f.admin, f.classB.id, FROM_FEB);
     await expect(assertClassAccess(actorC, f.classB.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
     const [first] = await sessionsOf(f.classB.id);
     await expect(assertSessionAccess(actorC, first!.id)).rejects.toMatchObject({ code: "NOT_FOUND" });

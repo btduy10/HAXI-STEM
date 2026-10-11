@@ -180,15 +180,26 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
         createAction={canEdit ? createTemplateAction.bind(null, classId) : undefined}
         updateAction={canEdit ? updateTemplateAction : undefined}
         deleteAction={canEdit ? deleteTemplateAction : undefined}
-        emptyText="Chưa có lịch mẫu. Thêm các buổi học cố định trong tuần, buổi học sẽ tự có trên Thời khóa biểu."
+        emptyText="Chưa có lịch mẫu. Thêm các buổi học trong tuần của lớp, rồi bấm “Sinh buổi học tuần sau”."
       />
 
       <section className="grid gap-2">
         <h2 className="text-lg font-semibold">Buổi học</h2>
         <p className="text-sm text-muted-foreground">
-          Buổi học được xếp theo lịch mẫu (đúng thứ, ca, phòng, GV chính và trợ giảng) trong thời gian {formatDate(cls.startDate)} –{" "}
-          {formatDate(cls.endDate)}, bỏ ngày nghỉ. Lớp học tiếp khóa sau thì dời Ngày kết thúc của lớp rồi sinh thêm buổi. Bấm nút dưới đây để xếp lại toàn bộ buổi chưa dạy theo lịch mẫu
-          hiện tại; buổi đã điểm danh, đã ghi sao và buổi đã hủy giữ nguyên.
+          Buổi học được sinh theo từng tuần, vì mỗi tuần thứ và ca học của lớp có thể đổi: chỉnh lịch mẫu nếu cần rồi bấm nút dưới đây để
+          xếp các buổi của tuần sau theo lịch mẫu (đúng thứ, ca, phòng, GV chính và trợ giảng), trong thời gian {formatDate(cls.startDate)} –{" "}
+          {formatDate(cls.endDate)} của lớp, bỏ ngày nghỉ. Sửa lịch mẫu không làm đổi các buổi đã có; buổi đã điểm danh, đã ghi sao, đã hủy và
+          các tuần khác giữ nguyên.
+        </p>
+        <p className="text-sm" data-next-week>
+          Tuần sau ({formatDate(overview.nextWeek.from)} – {formatDate(overview.nextWeek.to)}):{" "}
+          {overview.nextWeek.count > 0 ? (
+            <>
+              đã có <strong>{overview.nextWeek.count}</strong> buổi.
+            </>
+          ) : (
+            "chưa sinh buổi."
+          )}
         </p>
         {overview.scheduled + overview.makeup > 0 ? (
           <div className="grid gap-2 glass-solid rounded-xl border p-3 text-sm">
@@ -206,13 +217,13 @@ export default async function ClassDetailPage({ params }: PageProps<"/admin/clas
             </p>
             {tracksStudents && overview.missingTeacher > 0 && (
               <p className="text-destructive">
-                {overview.missingTeacher} buổi chưa có giáo viên. Hãy phân công GV chính cho lớp hoặc chọn GV trong lịch mẫu, rồi bấm “Sinh buổi học từ
-                lịch mẫu”.
+                {overview.missingTeacher} buổi chưa có giáo viên. Hãy phân công GV chính cho lớp hoặc chọn GV trong lịch mẫu trước khi sinh buổi tuần
+                sau; buổi đã có thì sửa giáo viên ở Thời khóa biểu.
               </p>
             )}
           </div>
         ) : (
-          <p className="rounded-2xl border border-dashed p-3 text-sm text-muted-foreground">Lớp chưa có buổi học nào. Thêm lịch mẫu rồi bấm “Sinh buổi học từ lịch mẫu”.</p>
+          <p className="rounded-2xl border border-dashed p-3 text-sm text-muted-foreground">Lớp chưa có buổi học nào. Thêm lịch mẫu rồi bấm “Sinh buổi học tuần sau”.</p>
         )}
         <div className="flex flex-wrap items-start gap-2">
           {canEdit && (

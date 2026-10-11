@@ -28,7 +28,7 @@ test.beforeAll(async () => {
   await db.end();
 });
 
-test("Phân công GV chính + trợ giảng, lịch mẫu tự sinh buổi; trợ giảng điểm danh; Admin xóa buổi đã điểm danh", async ({ page, browser }) => {
+test("Phân công GV chính + trợ giảng, lịch mẫu rồi sinh buổi tuần sau ở trang lớp và ở Thời khóa biểu; trợ giảng điểm danh; Admin xóa buổi đã điểm danh", async ({ page, browser }) => {
   await login(page, "admin", NEW_PASSWORD);
   await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
   await page.getByRole("button", { name: "Xác nhận" }).click();
@@ -52,14 +52,54 @@ test("Phân công GV chính + trợ giảng, lịch mẫu tự sinh buổi; tr�
   await expect(section(/Giáo viên phụ trách/).getByText("Trần Văn Minh").first()).toBeVisible();
   await expect(section(/Giáo viên phụ trách/).getByText(/Lương/)).toHaveCount(0);
 
-  // Lịch mẫu thứ hôm nay, có trợ giảng → buổi tự có trên Thời khóa biểu, không cần bấm Sinh buổi.
+  // Lịch mẫu thứ hôm nay, có trợ giảng. Lịch mẫu không tự tạo buổi: buổi chỉ có khi bấm sinh lịch tuần sau.
   await section(/Lịch mẫu hằng tuần/).getByRole("button", { name: "Thêm" }).click();
   await page.locator("#f-weekday").selectOption(String(isoWeekday(today())));
   await page.locator("#f-timeSlotId").selectOption({ label: "Ca E2E (05:00–05:45)" });
   await page.locator("#f-teacherId").selectOption({ label: "GV02 – Trần Văn Minh" });
   await page.locator("#f-assistantTeacherId").selectOption({ label: "GV01 – Nguyễn Thị Lan" });
   await page.getByRole("button", { name: "Lưu" }).click();
-  await expect(page.getByText(/Đã tự thêm \d+ buổi vào Thời khóa biểu\./)).toBeVisible();
+  await expect(page.getByText("Đã lưu.")).toBeVisible();
+  await expect(page.getByText(/Đã tự thêm \d+ buổi/)).toHaveCount(0);
+  await expect(page.locator("[data-next-week]")).toContainText("chưa sinh buổi.");
+  const db = sql();
+  expect(await db`select id from sessions where class_id = ${classId}`).toHaveLength(0);
+
+  // Trang chi tiết lớp, nút "Sinh buổi học tuần sau": hỏi xác nhận, tạo buổi của tuần sau rồi mở Thời khóa biểu ở tuần đó, lọc theo lớp.
+  const nextMonday = shift(today(), 8 - isoWeekday(today()));
+  const nextWeekDay = shift(nextMonday, isoWeekday(today()) - 1);
+  page.once("dialog", (dialog) => {
+    expect(dialog.message()).toContain("Các buổi chưa dạy của tuần sau");
+    void dialog.accept();
+  });
+  await page.getByRole("button", { name: "Sinh buổi học tuần sau" }).click();
+  await expect(page.getByText(/Đã tạo 1 buổi cho tuần \d{2}\/\d{2}\/\d{4} – \d{2}\/\d{2}\/\d{4}\./)).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/admin/timetable\\?view=week&date=${nextMonday}&classId=${classId}$`));
+  await expect(page.locator("a:visible").filter({ hasText: /Trợ giảng: Nguyễn Thị Lan/ }).first()).toBeVisible();
+  const weekOf = () => db`select date::text as date from sessions where class_id = ${classId} order by date`;
+  expect((await weekOf()).map((m) => m.date)).toEqual([nextWeekDay]);
+  await expectNoHorizontalScroll(page);
+
+  // Thời khóa biểu, nút "Sinh lịch tuần sau": bổ sung buổi còn thiếu cho mọi lớp đang mở, không hỏi xác nhận, rồi mở tuần sau.
+  await db`delete from sessions where class_id = ${classId}`;
+  await page.goto(`/admin/timetable?date=${today()}`);
+  await page.getByRole("button", { name: "Sinh lịch tuần sau" }).click();
+  await expect(page.getByText(/Đã tạo \d+ buổi cho tuần \d{2}\/\d{2}\/\d{4} – \d{2}\/\d{2}\/\d{4}\./)).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/admin/timetable\\?view=week&date=${nextMonday}$`));
+  expect((await weekOf()).map((m) => m.date)).toEqual([nextWeekDay]);
+  // Bấm lại: không tạo trùng, buổi đã có giữ nguyên.
+  const total = async () => ((await db`select count(*)::int as n from sessions`) as unknown as [{ n: number }])[0].n;
+  const count = await total();
+  await page.getByRole("button", { name: "Sinh lịch tuần sau" }).click();
+  await expect(page.getByText(/Tuần \d{2}\/\d{2}\/\d{4} – \d{2}\/\d{2}\/\d{4} không có buổi nào cần tạo thêm\./)).toBeVisible();
+  expect(await total()).toBe(count);
+  await expectNoHorizontalScroll(page);
+
+  // Buổi của hôm nay (tuần này) không do nút sinh ra: thêm thẳng vào CSDL như một buổi đã có sẵn, để thử điểm danh.
+  await db`
+    insert into sessions (class_id, template_id, date, start_time, end_time, time_slot_id, room_id, teacher_id, assistant_teacher_id)
+    select class_id, template_id, ${today()}, start_time, end_time, time_slot_id, room_id, teacher_id, assistant_teacher_id
+    from sessions where class_id = ${classId}`;
 
   // Tên viết tắt: nhập ở menu Giáo viên (Mã GV đứng trước Họ tên), Thời khóa biểu hiện tên viết tắt thay họ tên.
   await page.goto("/admin/teachers");
@@ -75,9 +115,8 @@ test("Phân công GV chính + trợ giảng, lịch mẫu tự sinh buổi; tr�
   await expect(page.locator("a:visible").filter({ hasText: /GV: T\.Minh · Trợ giảng: Nguyễn Thị Lan/ }).first()).toBeVisible();
   await expectNoHorizontalScroll(page);
 
-  const db = sql();
   const [session] = await db`select id from sessions where class_id = ${classId} and date = ${today()}`;
-  expect(session, "buổi hôm nay phải được tự sinh").toBeTruthy();
+  expect(session, "phải có buổi hôm nay của lớp").toBeTruthy();
   const sessionId = session!.id as string;
 
   // Trợ giảng (gv.lan) thấy lớp ở "Lớp của tôi" và điểm danh được buổi mình trợ giảng.
@@ -187,7 +226,7 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   await expectNoHorizontalScroll(page);
   const lendId = cls!.id as string;
 
-  // Trang chi tiết rút gọn: không có Sĩ số, phần Học viên, nút Quản lý ghi danh. Thêm lịch mẫu thứ hôm nay → buổi tự có.
+  // Trang chi tiết rút gọn: không có Sĩ số, phần Học viên, nút Quản lý ghi danh. Thêm lịch mẫu thứ hôm nay rồi sinh buổi tuần sau.
   await page.goto(`/admin/classes/${lendId}`);
   await expect(page.getByText("Chỉ hiển thị trên Thời khóa biểu", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Học viên đang học/ })).toHaveCount(0);
@@ -198,17 +237,29 @@ test("Lớp chỉ hiển thị trên Thời khóa biểu: tạo ở Lớp học,
   await page.locator("#f-weekday").selectOption(String(isoWeekday(day)));
   await page.locator("#f-timeSlotId").selectOption({ label: "Ca E2E (05:00–05:45)" });
   await page.getByRole("button", { name: "Lưu" }).click();
-  await expect(page.getByText(/Đã tự thêm \d+ buổi vào Thời khóa biểu\./)).toBeVisible();
-  // Xếp lại toàn bộ theo lịch mẫu để có cả buổi của tuần trước (đã qua ngày, không ai điểm danh).
+  await expect(page.getByText("Đã lưu.")).toBeVisible();
+  expect(await db`select id from sessions where class_id = ${lendId}`).toHaveLength(0);
   page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "Sinh buổi học từ lịch mẫu" }).click();
-  await expect(page.getByText(/Lớp có \d+ buổi/)).toBeVisible();
+  await page.getByRole("button", { name: "Sinh buổi học tuần sau" }).click();
+  await expect(page.getByText(/Đã tạo 1 buổi cho tuần/)).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/admin/timetable\\?view=week&date=\\d{4}-\\d{2}-\\d{2}&classId=${lendId}$`));
+  await expect(page.locator("[data-timetable-only]:visible").first()).toContainText(lendCode);
+  await expectNoHorizontalScroll(page);
+  // Buổi hôm nay và buổi tuần trước (đã qua ngày, không ai điểm danh) không do nút sinh ra: thêm thẳng vào CSDL như buổi đã có sẵn.
+  for (const date of [day, shift(day, -7)]) {
+    await db`
+      insert into sessions (class_id, template_id, date, start_time, end_time, time_slot_id, room_id, teacher_id)
+      select class_id, template_id, ${date}, start_time, end_time, time_slot_id, room_id, teacher_id
+      from sessions where class_id = ${lendId} order by date desc limit 1`;
+  }
+  await page.goto(`/admin/classes/${lendId}`);
+  await expect(page.locator("[data-next-week]")).toContainText("đã có 1 buổi.");
   await expect(page.getByText(/buổi chưa có giáo viên/)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   const held = await db`select id, date::text as date from sessions where class_id = ${lendId} order by date`;
   await db.end();
   const todaySession = held.find((x) => x.date === day);
-  expect(todaySession, "buổi hôm nay của lớp mượn phòng phải được tự sinh").toBeTruthy();
+  expect(todaySession, "phải có buổi hôm nay của lớp mượn phòng").toBeTruthy();
   expect(held.some((x) => x.date < day), "phải có buổi đã qua để thử nhãn Quá hạn").toBe(true);
 
   // Thời khóa biểu: ô xám riêng, nhãn và chú giải "Chỉ xem lịch"; buổi đã qua không bị gắn "Quá hạn".

@@ -1,25 +1,28 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
 import { classes, classTeachers, enrollments, scheduleTemplates, sessions, students, teachers, timeSlots } from "@/db/schema";
 import { ROSTER_DARKEST, ROSTER_LIGHTEST, ROSTER_NO_TEACHER_SHADE } from "@/domain/roster";
+import { addDays, startOfWeek } from "@/lib/dates";
+import { todayIso } from "@/lib/format";
 import { DEFAULT_PERMISSIONS, type RolePermissions } from "@/lib/permissions";
 import type { Actor } from "@/server/guard";
 import * as classSvc from "@/server/services/classes";
 import { type Fixture, resetDb, seedFixture } from "./helpers";
 
-// Tuần đang xem: Thứ Hai 12/01/2026 → Chủ nhật 18/01/2026 (hôm nay là Thứ Tư 14/01).
+// Bảng lấy theo LỊCH MẪU của lớp, không đọc Thời khóa biểu.
 // Lịch mẫu: lớp A Tối Thứ 5 (hai khung của Ca tối) và Sáng Thứ 7; lớp B Tối Thứ 2. Mỗi lớp 2 học viên, GV chính A/B.
-const TODAY = "2026-01-14";
 let f: Fixture;
 let evening: typeof timeSlots.$inferSelect;
 let morning: typeof timeSlots.$inferSelect;
+let afternoon: typeof timeSlots.$inferSelect;
+let lateEvening: typeof timeSlots.$inferSelect;
 
 const withEnrollments = (actor: Actor, scope: RolePermissions["scope"]): Actor => ({
   ...actor,
   perms: { scope, menus: { ...DEFAULT_PERMISSIONS.teacher.menus, enrollments: { view: true, add: false, edit: false } } },
 });
-const roster = (actor: Actor = f.admin) => classSvc.weeklyRoster(actor, TODAY);
+const roster = (actor: Actor = f.admin) => classSvc.weeklyRoster(actor);
 type Block = Awaited<ReturnType<typeof roster>>["blocks"][number];
 // Tên khung: các buổi của khung theo thứ tự từ trên xuống, rồi mã lớp.
 const title = (b: Block) => `${b.sessions.map((s) => s.label).join(" + ")}|${b.classCode}`;
@@ -36,10 +39,13 @@ beforeEach(async () => {
       { name: "Ca tối", frame: 1, defaultStart: "18:00", defaultEnd: "19:30" },
       { name: "Ca tối", frame: 2, defaultStart: "19:30", defaultEnd: "21:00" },
       { name: "Ca sáng", frame: 1, defaultStart: "08:00", defaultEnd: "09:30" },
+      { name: "Ca chiều", frame: 1, defaultStart: "14:00", defaultEnd: "15:30" },
     ])
     .returning();
   evening = slots[0]!;
+  lateEvening = slots[1]!;
   morning = slots[2]!;
+  afternoon = slots[3]!;
   await db.insert(scheduleTemplates).values([
     { classId: f.classA.id, weekday: 6, timeSlotId: morning.id },
     { classId: f.classA.id, weekday: 4, timeSlotId: evening.id },
@@ -50,7 +56,7 @@ beforeEach(async () => {
 });
 
 describe("tổng quan Ghi danh theo buổi trong tuần", () => {
-  it("lớp không có buổi trong tuần lấy theo lịch mẫu: giờ của ca (gộp các khung), GV chính của lớp, kèm học viên và khối", async () => {
+  it("theo lịch mẫu của lớp: giờ của ca (gộp các khung), GV chính của lớp, kèm học viên và khối", async () => {
     const { blocks, unscheduled } = await roster();
     // Lớp A học 2 buổi/tuần với cùng giáo viên: một khung, buổi sớm hơn trong tuần nằm trên.
     expect(blocks.map(title)).toEqual(["Tối Thứ 2|B", "Tối Thứ 5 + Sáng Thứ 7|A"]);
@@ -78,16 +84,22 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
   });
 
   it("cùng lớp, cùng giáo viên gom một khung theo thứ tự buổi trong tuần; buổi của giáo viên khác là khung riêng", async () => {
-    // Lớp A tuần này học Tối Chủ nhật và Chiều Thứ 7, cùng GV A: một khung, Chiều Thứ 7 nằm trên Tối Chủ nhật.
-    await hold({ classId: f.classA.id, date: "2026-01-18", teacherId: f.teacherA.id });
-    await hold({ classId: f.classA.id, date: "2026-01-17", startTime: "14:00", endTime: "15:30", timeSlotId: null, teacherId: f.teacherA.id });
+    // Lớp A học Tối Chủ nhật và Chiều Thứ 7, cùng GV A: một khung, Chiều Thứ 7 nằm trên Tối Chủ nhật.
+    await db.delete(scheduleTemplates).where(eq(scheduleTemplates.classId, f.classA.id));
+    const [sunday] = await db
+      .insert(scheduleTemplates)
+      .values([
+        { classId: f.classA.id, weekday: 7, timeSlotId: evening.id },
+        { classId: f.classA.id, weekday: 6, timeSlotId: afternoon.id, teacherId: f.teacherA.id },
+      ])
+      .returning();
     const merged = (await roster()).blocks;
     expect(merged.map(title)).toEqual(["Tối Thứ 2|B", "Chiều Thứ 7 + Tối Chủ nhật|A"]);
-    expect(merged[1]!.sessions.map((s) => `${s.startTime}-${s.endTime}`)).toEqual(["14:00:00-15:30:00", "19:00:00-20:30:00"]);
+    expect(merged[1]!.sessions.map((s) => `${s.startTime}-${s.endTime}`)).toEqual(["14:00:00-15:30:00", "18:00:00-19:30:00"]);
     expect(merged[1]!.students).toHaveLength(2);
 
-    // Buổi Chủ nhật do GV B dạy thay: lớp A có hai khung, mỗi giáo viên một khung, cùng danh sách học viên.
-    await db.update(sessions).set({ substituteTeacherId: f.teacherB.id }).where(eq(sessions.date, "2026-01-18"));
+    // Dòng Chủ nhật do GV B dạy: lớp A có hai khung, mỗi giáo viên một khung, cùng danh sách học viên.
+    await db.update(scheduleTemplates).set({ teacherId: f.teacherB.id }).where(eq(scheduleTemplates.id, sunday!.id));
     const split = (await roster()).blocks;
     expect(split.map((b) => `${title(b)}|${b.teacherName}`)).toEqual([
       "Tối Thứ 2|B|Giáo viên B",
@@ -98,30 +110,30 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     expect(new Set(split.map((b) => b.key)).size).toBe(3);
   });
 
-  it("lớp có buổi trên Thời khóa biểu tuần này thì theo Thời khóa biểu, không theo lịch mẫu", async () => {
-    // Lịch mẫu của lớp A ghi Tối Thứ 5 và Sáng Thứ 7, nhưng tuần này lớp chỉ học Tối Thứ 7 (xếp tay).
+  it("không đọc Thời khóa biểu: buổi xếp tay, buổi dời, dạy thay trong tuần không làm đổi bảng", async () => {
     await db.update(teachers).set({ shortName: "Cô B" }).where(eq(teachers.id, f.teacherB.id));
-    await hold({ classId: f.classA.id, date: "2026-01-17", teacherId: f.teacherA.id });
-    // Buổi đã hủy, buổi bù và buổi của tuần khác không tạo thành buổi của tuần.
-    await hold({ classId: f.classA.id, date: "2026-01-12", status: "cancelled" });
-    await hold({ classId: f.classA.id, date: "2026-01-13", kind: "makeup" });
-    await hold({ classId: f.classA.id, date: "2026-01-20" });
-
-    const { blocks } = await roster();
-    expect(blocks.map(title)).toEqual(["Tối Thứ 2|B", "Tối Thứ 7|A"]);
-    expect(blocks[1]).toMatchObject({ sessions: [{ startTime: "19:00:00", endTime: "20:30:00" }], teacherName: "Giáo viên A" });
-
-    // Có giáo viên dạy thay thì ghi người thực dạy (tên viết tắt nếu có).
-    await db.update(sessions).set({ substituteTeacherId: f.teacherB.id }).where(eq(sessions.date, "2026-01-17"));
-    expect((await roster()).blocks[1]!.teacherName).toBe("Cô B");
+    const before = await roster();
+    // Tuần này lớp A học Tối Thứ 7 do GV B dạy thay, thêm một buổi xếp tay Chủ nhật; lớp B không có buổi nào.
+    const monday = startOfWeek(todayIso());
+    await hold({ classId: f.classA.id, date: addDays(monday, 5), teacherId: f.teacherA.id, substituteTeacherId: f.teacherB.id });
+    await hold({ classId: f.classA.id, date: addDays(monday, 6), startTime: "09:00", endTime: "10:30", timeSlotId: null });
+    await hold({ classId: f.classA.id, date: addDays(monday, 7), kind: "makeup" });
+    expect(await roster()).toEqual(before);
+    expect(before.blocks.map((b) => `${title(b)}|${b.teacherName}`)).toEqual(["Tối Thứ 2|B|Cô B", "Tối Thứ 5 + Sáng Thứ 7|A|Giáo viên A"]);
   });
 
-  it("khung đứng theo buổi đầu tuần của nó, cùng một buổi thì lớp học sớm hơn đứng trước; buổi không gắn ca suy ca theo giờ bắt đầu", async () => {
-    await hold({ classId: f.classA.id, date: "2026-01-17", startTime: "19:30", endTime: "21:00" });
-    await hold({ classId: f.classB.id, date: "2026-01-17", startTime: "18:00", endTime: "19:30" });
-    await hold({ classId: f.classA.id, date: "2026-01-18", startTime: "09:00", endTime: "10:30", timeSlotId: null });
-    await hold({ classId: f.classB.id, date: "2026-01-18", startTime: "14:00", endTime: "15:30", timeSlotId: null });
+  it("khung đứng theo buổi đầu tuần của nó; cùng một buổi thì lớp học sớm hơn đứng trước", async () => {
+    await db.delete(scheduleTemplates);
+    await db.insert(scheduleTemplates).values([
+      { classId: f.classA.id, weekday: 6, timeSlotId: lateEvening.id },
+      { classId: f.classA.id, weekday: 7, timeSlotId: morning.id },
+      { classId: f.classB.id, weekday: 6, timeSlotId: evening.id },
+      { classId: f.classB.id, weekday: 7, timeSlotId: afternoon.id },
+    ]);
     expect(await titles()).toEqual(["Tối Thứ 7 + Chiều Chủ nhật|B", "Tối Thứ 7 + Sáng Chủ nhật|A"]);
+    // Lớp A có thêm buổi Sáng Thứ 2: khung của lớp A lên đầu.
+    await db.insert(scheduleTemplates).values({ classId: f.classA.id, weekday: 1, timeSlotId: morning.id });
+    expect(await titles()).toEqual(["Sáng Thứ 2 + Tối Thứ 7 + Sáng Chủ nhật|A", "Tối Thứ 7 + Chiều Chủ nhật|B"]);
   });
 
   it("màu khung theo giáo viên: các khung của cùng một người cùng tông, đậm nhạt khác nhau; chưa có giáo viên thì xám", async () => {
@@ -133,10 +145,12 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     // Mỗi giáo viên chỉ một khung (hai buổi của GV A đã gom) nên đều ở mức giữa.
     expect([monday![0], classA![0]]).toEqual([0.855, 0.855]);
 
-    // Dạy thay: khung mang màu của người thực dạy (GV B giờ có hai khung: nhạt nhất rồi đậm nhất; GV A còn một).
-    await hold({ classId: f.classA.id, date: "2026-01-17", teacherId: f.teacherA.id, substituteTeacherId: f.teacherB.id });
-    await hold({ classId: f.classA.id, date: "2026-01-15", teacherId: f.teacherA.id });
-    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7|A"]);
+    // Dòng Sáng Thứ 7 của lớp A giao cho GV B: khung mang màu của giáo viên ở dòng lịch mẫu (GV B có hai khung: nhạt nhất rồi đậm nhất).
+    await db
+      .update(scheduleTemplates)
+      .set({ teacherId: f.teacherB.id })
+      .where(and(eq(scheduleTemplates.classId, f.classA.id), eq(scheduleTemplates.weekday, 6)));
+    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Sáng Thứ 7|A"]);
     expect(await headers()).toEqual([
       [ROSTER_LIGHTEST, expect.any(Number), 255],
       [0.855, expect.any(Number), 75],
@@ -144,23 +158,22 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     ]);
 
     // Thêm một buổi của GV B ở cùng lớp A: gom vào khung sẵn có, số khung và màu không đổi.
-    await hold({ classId: f.classA.id, date: "2026-01-18", teacherId: f.teacherB.id });
-    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7 + Tối Chủ nhật|A"]);
+    await db.insert(scheduleTemplates).values({ classId: f.classA.id, weekday: 7, timeSlotId: evening.id, teacherId: f.teacherB.id });
+    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Sáng Thứ 7 + Tối Chủ nhật|A"]);
     const ofB = async () => (await headers()).filter(([, , hue]) => hue === 255).map(([lightness]) => lightness);
     expect(await ofB()).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST]);
-    await db.delete(sessions).where(eq(sessions.date, "2026-01-18"));
 
     // Ba khung của cùng một giáo viên (ba lớp) xếp xen kẽ: nhạt nhất, đậm nhất, rồi mức giữa.
     const [third] = await db
       .insert(classes)
       .values({ code: "C", name: "Lớp C", startDate: "2026-01-06", endDate: "2026-03-31", maxSize: 8 })
       .returning();
-    await hold({ classId: third!.id, date: "2026-01-18", teacherId: f.teacherB.id });
-    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Tối Thứ 7|A", "Tối Chủ nhật|C"]);
+    await db.insert(scheduleTemplates).values({ classId: third!.id, weekday: 7, timeSlotId: afternoon.id, teacherId: f.teacherB.id });
+    expect(await titles()).toEqual(["Tối Thứ 2|B", "Tối Thứ 5|A", "Sáng Thứ 7 + Tối Chủ nhật|A", "Chiều Chủ nhật|C"]);
     expect(await ofB()).toEqual([ROSTER_LIGHTEST, ROSTER_DARKEST, 0.855]);
     await db.delete(classes).where(eq(classes.id, third!.id));
 
-    // Buổi chưa có giáo viên (lớp không có GV chính, lịch mẫu không ghi giáo viên): xám trung tính.
+    // Khung chưa có giáo viên (lớp không có GV chính, lịch mẫu không ghi giáo viên): xám trung tính.
     await db.delete(classTeachers).where(eq(classTeachers.classId, f.classB.id));
     expect((await roster()).blocks[0]!.shade).toEqual(ROSTER_NO_TEACHER_SHADE);
   });
@@ -173,7 +186,7 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
     expect(blocks.find((b) => b.classCode === "A")!.students.map((s) => s.fullName)).toEqual(["Học viên A1", "Học viên X1"]);
   });
 
-  it("không gồm lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu; lớp chưa có buổi lẫn lịch mẫu nằm ở danh sách riêng", async () => {
+  it("không gồm lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu; lớp chưa có lịch mẫu nằm ở danh sách riêng", async () => {
     await db.update(classes).set({ status: "closed" }).where(eq(classes.id, f.classB.id));
     const [lend, fresh] = await db
       .insert(classes)
@@ -183,8 +196,8 @@ describe("tổng quan Ghi danh theo buổi trong tuần", () => {
       ])
       .returning();
     await db.insert(scheduleTemplates).values({ classId: lend!.id, weekday: 2, timeSlotId: evening.id });
-    await hold({ classId: lend!.id, date: "2026-01-13" });
-    await hold({ classId: f.classB.id, date: "2026-01-13" });
+    // Lớp mới có buổi xếp tay trên Thời khóa biểu nhưng chưa có lịch mẫu: vẫn nằm ở danh sách riêng.
+    await hold({ classId: fresh!.id, date: "2026-01-13" });
     const { blocks, unscheduled } = await roster();
     expect(blocks.map(title)).toEqual(["Tối Thứ 5 + Sáng Thứ 7|A"]);
     expect(unscheduled).toEqual([{ id: fresh!.id, code: "M", name: "Lớp mới" }]);

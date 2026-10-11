@@ -179,7 +179,11 @@ async function main() {
     const { sessionRoster } = await import("../src/server/services/attendance");
     const [adminUser] = await db.select().from(s.user).where(sql`${s.user.role} = 'admin'`).limit(1);
     const admin = { userId: adminUser!.id, role: "admin" as const, teacherId: null };
-    for (const classId of classIds) await generateSessions(admin, classId);
+    // Như khi dùng thật: buổi học chỉ có tới hết tuần sau (sinh theo từng tuần), không sinh sẵn tới ngày kết thúc của lớp.
+    const { nextWeekRange } = await import("../src/lib/dates");
+    const { todayIso } = await import("../src/lib/format");
+    const until = nextWeekRange(todayIso()).to;
+    for (const classId of classIds) await generateSessions(admin, classId, { from: "2000-01-01", to: until });
     const oldSessions = await db.select().from(s.sessions).where(sql`${s.sessions.date} < ${iso(addDays(today, -7))}`);
     for (const session of oldSessions) {
       const roster = await sessionRoster(db, session);

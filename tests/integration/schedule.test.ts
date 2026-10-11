@@ -446,34 +446,32 @@ describe("lịch mẫu bị lặp trong cùng một lớp", () => {
     startTime: null,
     endTime: null,
   });
-  const now = at("2026-01-05");
-
   it("không cho thêm hoặc sửa thành hai dòng cùng Thứ + Ca + Khung giờ; khác khung hoặc khác thứ thì được", async () => {
-    await svc.createTemplate(f.admin, input(2, morning.id), now);
-    await expect(svc.createTemplate(f.admin, input(2, morning.id), now)).rejects.toMatchObject({
+    await svc.createTemplate(f.admin, input(2, morning.id));
+    await expect(svc.createTemplate(f.admin, input(2, morning.id))).rejects.toMatchObject({
       code: "VALIDATION",
       fieldErrors: { timeSlotId: "Lớp đã có lịch mẫu vào Thứ Ba, ca và khung giờ này." },
     });
-    await svc.createTemplate(f.admin, input(2, late.id), now);
-    await svc.createTemplate(f.admin, input(4, morning.id), now);
+    await svc.createTemplate(f.admin, input(2, late.id));
+    await svc.createTemplate(f.admin, input(4, morning.id));
     const rows = await db.select().from(scheduleTemplates).where(eq(scheduleTemplates.classId, f.classA.id));
     const thursday = rows.find((r) => r.weekday === 4)!;
     const fields = { weekday: 2, timeSlotId: morning.id, roomId: null, teacherId: null, assistantTeacherId: null, startTime: null, endTime: null };
-    await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields }, now)).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields })).rejects.toMatchObject({ code: "VALIDATION" });
     // Sửa chính nó (giữ nguyên thứ, khung) thì không tự báo trùng.
-    await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields, weekday: 4, teacherId: f.teacherA.id }, now)).resolves.toBeDefined();
+    await expect(svc.updateTemplate(f.admin, { id: thursday.id, ...fields, weekday: 4, teacherId: f.teacherA.id })).resolves.toBeDefined();
   });
 
   it("dữ liệu cũ có hai dòng lặp: sinh buổi vẫn đủ số buổi, không báo trùng với chính lớp mình", async () => {
     await template(f.classA.id, 2, morning.id);
     await template(f.classA.id, 2, morning.id);
-    const result = await svc.rebuildSchedule(f.admin, f.classA.id);
+    const result = await svc.generateSessions(f.admin, f.classA.id);
     expect(result.conflicts).toEqual([]);
     expect(result.created).toBe(13);
     const dates = (await sessionsOf(f.classA.id)).map((x) => x.date);
     expect(new Set(dates).size).toBe(13);
     // Trùng với LỚP KHÁC vẫn được báo.
     await template(f.classB.id, 2, morning.id);
-    expect((await svc.rebuildSchedule(f.admin, f.classB.id)).conflicts.length).toBeGreaterThan(0);
+    expect((await svc.generateSessions(f.admin, f.classB.id)).conflicts.length).toBeGreaterThan(0);
   });
 });

@@ -197,6 +197,13 @@
       "when": 1791697910132,
       "tag": "0027_classes_without_course",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791717142322,
+      "tag": "0028_weekly_session_generation",
+      "breakpoints": true
     }
   ]
 }

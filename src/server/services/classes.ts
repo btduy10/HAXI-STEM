@@ -1,5 +1,4 @@
-import { and, asc, between, count, desc, eq, gte, inArray, like, lt, ne, sql } from "drizzle-orm";
-import { alias } from "drizzle-orm/pg-core";
+import { and, asc, count, desc, eq, gte, inArray, like, lt, sql } from "drizzle-orm";
 import type { z } from "zod";
 import { db, type Tx } from "@/db";
 import {
@@ -22,8 +21,7 @@ import {
   tuitionReceipts,
 } from "@/db/schema";
 import { classCodeYearPrefix, nextClassCode } from "@/domain/student-code";
-import { ROSTER_NO_TEACHER_SHADE, rosterSessionLabel, rosterSessionOrder, rosterTeacherShade, shiftOfTime } from "@/domain/roster";
-import { addDays, isoWeekday, startOfWeek } from "@/lib/dates";
+import { ROSTER_NO_TEACHER_SHADE, rosterSessionLabel, rosterSessionOrder, rosterTeacherShade } from "@/domain/roster";
 import { todayIso } from "@/lib/format";
 import type { classInput, classTeacherInput, classTeacherUpdate, enrollInput, leaveInput, newEnrollmentInput } from "@/lib/validation/entities";
 import { audit } from "../audit";
@@ -204,49 +202,20 @@ export async function unassignTeacher(actor: Actor, id: string) {
   });
 }
 
-const substituteTeacher = alias(teachers, "substitute");
-
 /**
  * Tổng quan Ghi danh theo buổi học trong tuần: mỗi lớp đang mở là một khung, liệt kê các buổi (thứ + ca) trong tuần của lớp
  * kèm giờ học, giáo viên và học viên đang học của lớp (chỉ họ tên và khối). Lớp học nhiều buổi/tuần với cùng một giáo viên
  * gom về một khung; buổi do giáo viên khác dạy là khung riêng.
- * Buổi lấy từ Thời khóa biểu của tuần chứa `today` (buổi chưa hủy, không tính buổi bù) nên luôn khớp Thời khóa biểu;
- * lớp không có buổi nào trong tuần (tuần nghỉ, chưa sinh buổi) thì lấy theo lịch mẫu.
+ * Buổi lấy từ LỊCH MẪU của lớp (giáo viên của dòng lịch mẫu, không ghi thì GV chính của lớp), không đọc Thời khóa biểu:
+ * buổi học được sinh theo từng tuần nên bảng này không phụ thuộc tuần đó đã sinh buổi hay chưa, cũng không đổi theo dạy thay, buổi dời.
  * Chỉ các lớp trong phạm vi của người dùng; không gồm lớp đã đóng và lớp chỉ hiển thị trên Thời khóa biểu.
  */
-export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
+export async function weeklyRoster(actor: Actor) {
   assertCan(actor, "enrollments", "view");
   const open = (await listClasses(actor)).filter((c) => c.status === "open");
   if (open.length === 0) return { blocks: [], unscheduled: [] };
   const ids = open.map((c) => c.id);
-  const weekStart = startOfWeek(today);
-  const [held, templates, mains, active, teacherOrder] = await Promise.all([
-    db
-      .select({
-        classId: sessions.classId,
-        date: sessions.date,
-        slotName: timeSlots.name,
-        startTime: sessions.startTime,
-        endTime: sessions.endTime,
-        teacherId: teachers.id,
-        teacherShort: teachers.shortName,
-        teacherName: teachers.fullName,
-        substituteId: substituteTeacher.id,
-        substituteShort: substituteTeacher.shortName,
-        substituteName: substituteTeacher.fullName,
-      })
-      .from(sessions)
-      .leftJoin(timeSlots, eq(timeSlots.id, sessions.timeSlotId))
-      .leftJoin(teachers, eq(teachers.id, sessions.teacherId))
-      .leftJoin(substituteTeacher, eq(substituteTeacher.id, sessions.substituteTeacherId))
-      .where(
-        and(
-          inArray(sessions.classId, ids),
-          between(sessions.date, weekStart, addDays(weekStart, 6)),
-          ne(sessions.status, "cancelled"),
-          eq(sessions.kind, "regular"),
-        ),
-      ),
+  const [templates, mains, active, teacherOrder] = await Promise.all([
     db
       .select({
         classId: scheduleTemplates.classId,
@@ -292,23 +261,11 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
   for (const m of mains) if (!mainOf.has(m.classId)) mainOf.set(m.classId, shown(m.teacherId, m.teacherShort, m.teacherName));
 
   type Slot = { classId: string; weekday: number; slotName: string; startTime: string; endTime: string; teacher: Teacher | null };
-  const fromTimetable: Slot[] = held.map((h) => ({
-    classId: h.classId,
-    weekday: isoWeekday(h.date),
-    slotName: h.slotName ?? shiftOfTime(h.startTime),
-    startTime: h.startTime,
-    endTime: h.endTime,
-    // Người thực dạy: giáo viên dạy thay nếu có.
-    teacher: shown(h.substituteId, h.substituteShort, h.substituteName) ?? shown(h.teacherId, h.teacherShort, h.teacherName),
-  }));
-  const onTimetable = new Set(fromTimetable.map((slot) => slot.classId));
-  const fromTemplates: Slot[] = templates
-    .filter((t) => !onTimetable.has(t.classId))
-    .map((t) => ({ ...t, teacher: shown(t.teacherId, t.teacherShort, t.teacherName) ?? mainOf.get(t.classId) ?? null }));
+  const slots: Slot[] = templates.map((t) => ({ ...t, teacher: shown(t.teacherId, t.teacherShort, t.teacherName) ?? mainOf.get(t.classId) ?? null }));
 
   // Nhiều khung giờ của cùng một ca trong cùng một ngày là một buổi: giờ từ khung sớm nhất tới khung muộn nhất.
   const merged = new Map<string, Slot>();
-  for (const slot of [...fromTimetable, ...fromTemplates].sort((a, b) => a.startTime.localeCompare(b.startTime))) {
+  for (const slot of slots.sort((a, b) => a.startTime.localeCompare(b.startTime))) {
     const key = `${slot.classId}|${slot.weekday}|${slot.slotName}`;
     const first = merged.get(key);
     if (!first) merged.set(key, { ...slot });
@@ -379,7 +336,7 @@ export async function weeklyRoster(actor: Actor, today: string = todayIso()) {
   const scheduled = new Set(blocks.map((block) => block.classId));
   return {
     blocks,
-    /** Lớp đang mở không có buổi trong tuần và cũng chưa có lịch mẫu nên chưa thuộc buổi nào. */
+    /** Lớp đang mở chưa có lịch mẫu nên chưa thuộc buổi nào. */
     unscheduled: open.filter((c) => !scheduled.has(c.id)).map((c) => ({ id: c.id, code: c.code, name: c.name })),
   };
 }

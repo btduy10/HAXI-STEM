@@ -174,13 +174,13 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
           canDelete={role === "admin"}
         >
           <p className="text-sm text-muted-foreground">
-            Các lớp đang học theo buổi trong tuần (theo Thời khóa biểu tuần này); lớp học nhiều buổi trong tuần với cùng giáo viên gom
-            một bảng. Bấm tên lớp để xem lịch sử ghi danh.
+            Các lớp đang học theo buổi trong tuần (theo Lịch mẫu của lớp); lớp học nhiều buổi trong tuần với cùng giáo viên gom một
+            bảng. Bấm tên lớp để xem lịch sử ghi danh.
             {can("add") && " Bấm một hàng “Thêm … học viên” để chọn học viên đã có hoặc nhập học viên mới vào lớp."}
             {can("edit") && " Bấm tên học viên để cho rời lớp."}
           </p>
           {roster.blocks.length === 0 ? (
-            <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Chưa có lớp đang mở nào có buổi học trong tuần hoặc lịch mẫu.</p>
+            <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Chưa có lớp đang mở nào có lịch mẫu.</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {roster.blocks.map((block) => {
@@ -264,7 +264,7 @@ export default async function EnrollmentsPage({ searchParams }: PageProps<"/admi
           )}
           {roster.unscheduled.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              Lớp đang mở chưa có buổi học trong tuần và chưa có lịch mẫu (chưa thuộc buổi nào):{" "}
+              Lớp đang mở chưa có lịch mẫu (chưa thuộc buổi nào):{" "}
               {roster.unscheduled.map((c, index) => (
                 <span key={c.id}>
                   {index > 0 && ", "}

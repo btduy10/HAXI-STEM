@@ -1,72 +1,42 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { useTransition } from "react";
 import { toast } from "sonner";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { generateSessionsAction } from "@/server/actions/schedule";
+import { formatDate } from "@/lib/format";
+import { generateNextWeekAction, generateNextWeekForAllAction } from "@/server/actions/schedule";
 
-type Result = {
-  created: number;
-  alreadyExisting: number;
-  warnings: string[];
-  scheduled?: number;
-  removed?: number;
-};
-
-export function GenerateSessionsButton({
-  classId,
-  disabled,
-}: {
-  classId: string;
-  disabled?: boolean;
-}) {
-  const [result, setResult] = useState<Result | null>(null);
+/**
+ * Sinh buổi học cho tuần sau từ lịch mẫu rồi mở Thời khóa biểu ở tuần đó.
+ * Có `classId` (trang chi tiết lớp): xếp lại tuần sau của lớp đó. Không có (Thời khóa biểu): bổ sung buổi còn thiếu cho mọi lớp.
+ */
+export function GenerateSessionsButton({ classId, disabled }: { classId?: string; disabled?: boolean }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
 
   function run() {
     if (
+      classId &&
       !window.confirm(
-        "Xếp lại lịch của lớp theo lịch mẫu? Các buổi chưa dạy (kể cả buổi xếp tay, buổi đã sửa riêng) được xếp lại đúng thứ, ca, giáo viên của lịch mẫu cho cả thời gian của lớp (từ ngày bắt đầu đến ngày kết thúc). Buổi đã điểm danh, đã ghi sao và buổi đã hủy giữ nguyên.",
+        "Sinh buổi học tuần sau cho lớp theo lịch mẫu hiện tại? Các buổi chưa dạy của tuần sau (kể cả buổi xếp tay, buổi đã sửa riêng) được xếp lại đúng thứ, ca, phòng, giáo viên của lịch mẫu. Buổi đã điểm danh, đã ghi sao, đã hủy, buổi bù và các tuần khác giữ nguyên.",
       )
     )
       return;
     startTransition(async () => {
-      const response = await generateSessionsAction({ classId });
+      const response = classId ? await generateNextWeekAction({ classId }) : await generateNextWeekForAllAction();
       if (!response.ok) return void toast.error(response.error);
-      setResult(response.data);
-      toast.success(`Đã tạo mới ${response.data.created} buổi theo lịch.`);
+      const { week, created, warnings } = response.data;
+      const range = `${formatDate(week.from)} – ${formatDate(week.to)}`;
+      toast.success(created > 0 ? `Đã tạo ${created} buổi cho tuần ${range}.` : `Tuần ${range} không có buổi nào cần tạo thêm.`);
+      for (const warning of warnings) toast.warning(warning, { duration: 10_000 });
+      router.push(`/admin/timetable?${new URLSearchParams({ view: "week", date: week.from, ...(classId ? { classId } : {}) })}`);
     });
   }
 
   return (
-    <div className="grid gap-2">
-      <Button className="h-10 w-fit" disabled={pending || disabled} onClick={run}>
-        {pending ? "Đang sinh buổi…" : "Sinh buổi học từ lịch mẫu"}
-      </Button>
-      {result && (
-        <Alert>
-          <AlertTitle>Đã tạo mới {result.created} buổi theo lịch.</AlertTitle>
-          <AlertDescription>
-            {result.scheduled !== undefined && (
-              <p>
-                Lớp có {result.scheduled} buổi
-                {result.scheduled > result.created && ` (giữ ${result.scheduled - result.created} buổi đã dạy)`}. Xem các buổi ở menu Thời
-                khóa biểu.
-              </p>
-            )}
-          </AlertDescription>
-          {result.warnings.length > 0 && (
-            <AlertDescription>
-              <ul className="list-disc pl-4">
-                {result.warnings.map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
-            </AlertDescription>
-          )}
-        </Alert>
-      )}
-    </div>
+    <Button className="h-10 w-fit" disabled={pending || disabled} onClick={run}>
+      {pending ? "Đang sinh buổi…" : classId ? "Sinh buổi học tuần sau" : "Sinh lịch tuần sau"}
+    </Button>
   );
 }

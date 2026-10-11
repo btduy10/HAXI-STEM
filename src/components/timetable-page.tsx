@@ -2,6 +2,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import Link from "next/link";
 import { ExportLinks } from "@/components/class-report";
 import { selectClass } from "@/components/form-dialog";
+import { GenerateSessionsButton } from "@/components/generate-sessions-button";
 import { ManualScheduler } from "@/components/manual-scheduler";
 import { MonthView, TIMETABLE_ONLY_LABEL, TeacherLegend, type TimetableSession, WeekView, leadTeacherId } from "@/components/timetable";
 import { Button } from "@/components/ui/button";
@@ -154,10 +155,14 @@ export async function TimetablePage({
         </LinkButton>
       </div>
 
-      <ExportLinks
-        label="Xuất khoảng đang xem"
-        baseHref={`/api/export/timetable?${new URLSearchParams({ from: range.from, to: range.to, ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) })}`}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ExportLinks
+          label="Xuất khoảng đang xem"
+          baseHref={`/api/export/timetable?${new URLSearchParams({ from: range.from, to: range.to, ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) })}`}
+        />
+        {/* Buổi học sinh theo từng tuần: bổ sung buổi tuần sau cho mọi lớp đang mở theo lịch mẫu, rồi mở tuần đó. */}
+        {options && canAdd && <GenerateSessionsButton />}
+      </div>
 
       <TeacherLegend entries={legend} />
 

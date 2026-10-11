@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findConflicts, isAttendanceLocked, isEnrolledOn, planSessions, timesOverlap } from "@/domain/schedule";
-import { addDays, addMonths, endOfMonth, isoWeekday, parseIsoDate, startOfWeek } from "@/lib/dates";
+import { addDays, addMonths, endOfMonth, isoWeekday, nextWeekRange, parseIsoDate, startOfWeek } from "@/lib/dates";
 
 describe("ngày tháng", () => {
   it("tính thứ, tuần, tháng không phụ thuộc múi giờ", () => {
@@ -12,6 +12,16 @@ describe("ngày tháng", () => {
     expect(endOfMonth("2028-02-10")).toBe("2028-02-29");
     expect(parseIsoDate("2026-02-30", "x")).toBe("x");
     expect(parseIsoDate("'; drop table", "x")).toBe("x");
+  });
+
+  it("tuần sau là Thứ Hai đến Chủ nhật của tuần kế tiếp, dù hôm nay là ngày nào trong tuần", () => {
+    const next = { from: "2026-02-09", to: "2026-02-15" };
+    expect(nextWeekRange("2026-02-02")).toEqual(next); // Thứ Hai
+    expect(nextWeekRange("2026-02-04")).toEqual(next); // Thứ Tư
+    expect(nextWeekRange("2026-02-08")).toEqual(next); // Chủ nhật vẫn thuộc tuần này
+    expect(nextWeekRange("2026-02-09")).toEqual({ from: "2026-02-16", to: "2026-02-22" });
+    // Qua tháng, qua năm.
+    expect(nextWeekRange("2026-12-30")).toEqual({ from: "2027-01-04", to: "2027-01-10" });
   });
 });
 
