@@ -1,76 +1,101 @@
 import { describe, expect, it } from "vitest";
 import {
-  CORRIDOR_WIDTH,
+  APRON,
+  BUILDING_GAP,
   type CenterSession,
-  MAX_SEATS,
-  ROOM_GAP,
-  layoutRooms,
+  MAIN_DEPTH,
+  MAIN_WIDTH,
+  ROOM_DEPTH,
+  type Rect,
+  dayProgress,
+  layoutCampus,
+  minutesOf,
+  roomFront,
   roomStatus,
-  roomWidth,
-  seatPositions,
+  sessionProgress,
 } from "@/domain/center-3d";
 import { timeNow } from "@/lib/format";
 
 const room = (id: string, capacity: number) => ({ id, name: `Phòng ${id}`, capacity });
+const edges = (rect: Rect) => ({
+  minX: rect.x - rect.width / 2,
+  maxX: rect.x + rect.width / 2,
+  minZ: rect.z - rect.depth / 2,
+  maxZ: rect.z + rect.depth / 2,
+});
+/** Hai hình chữ nhật có phần chung (chạm mép không tính). */
+const overlap = (a: Rect, b: Rect) => {
+  const [p, q] = [edges(a), edges(b)];
+  return p.minX < q.maxX - 1e-9 && q.minX < p.maxX - 1e-9 && p.minZ < q.maxZ - 1e-9 && q.minZ < p.maxZ - 1e-9;
+};
+const inside = (inner: Rect, outer: Rect) => {
+  const [p, q] = [edges(inner), edges(outer)];
+  return p.minX >= q.minX - 1e-9 && p.maxX <= q.maxX + 1e-9 && p.minZ >= q.minZ - 1e-9 && p.maxZ <= q.maxZ + 1e-9;
+};
 
-describe("giao diện 3D trung tâm: bố trí phòng", () => {
-  it("bề ngang phòng theo sức chứa, trong giới hạn", () => {
-    expect(roomWidth(1)).toBe(5);
-    expect(roomWidth(12)).toBe(7);
-    expect(roomWidth(100)).toBe(9);
-    expect(roomWidth(8)).toBeLessThan(roomWidth(16));
+describe("dashboard 3D: bố trí khuôn viên", () => {
+  it("bề ngang mặt tiền phòng theo sức chứa, trong giới hạn", () => {
+    expect(roomFront(1)).toBe(6);
+    expect(roomFront(10)).toBe(7);
+    expect(roomFront(100)).toBe(9);
+    expect(roomFront(8)).toBeLessThan(roomFront(16));
   });
 
-  it("không có phòng thì cảnh rỗng", () => {
-    expect(layoutRooms([])).toEqual({ rooms: [], length: 0 });
+  it("không có phòng: vẫn có tòa nhà chính, sân và hai con đường, canh giữa quanh gốc tọa độ", () => {
+    const campus = layoutCampus([]);
+    expect(campus.rooms).toEqual([]);
+    expect(campus.bounds.x).toBeCloseTo(0);
+    expect(campus.bounds.z).toBeCloseTo(0);
+    expect(campus.main).toMatchObject({ width: MAIN_WIDTH, depth: MAIN_DEPTH });
+    expect(campus.plaza.width).toBeGreaterThanOrEqual(14);
+    expect(campus.plaza.depth).toBeGreaterThanOrEqual(14);
+    for (const part of [campus.main, campus.plaza, campus.roads.south, campus.roads.east]) expect(inside(part, campus.bounds)).toBe(true);
   });
 
-  it("xếp hai dãy dọc hành lang theo thứ tự danh sách, phòng kế tiếp vào dãy đang ngắn hơn, canh giữa", () => {
-    const rooms = [room("a", 12), room("b", 6), room("c", 6), room("d", 20), room("e", 8)];
-    const { rooms: placed, length } = layoutRooms(rooms);
-    expect(placed.map((p) => p.id)).toEqual(["a", "b", "c", "d", "e"]);
-    // a (7 m) dãy sau; b (5,5 m) dãy trước; c vào dãy trước (ngắn hơn); d vào dãy sau; e vào dãy trước.
-    expect(placed.map((p) => p.side)).toEqual([-1, 1, 1, -1, 1]);
+  it.each([1, 2, 3, 5, 8, 12])("%i phòng: xếp lần lượt dãy bắc rồi dãy tây, cửa nhìn ra sân, không chồng nhau, nằm trong nền", (count) => {
+    const rooms = Array.from({ length: count }, (_, index) => room(String(index), 6 + index * 3));
+    const campus = layoutCampus(rooms);
+    expect(campus.rooms.map((r) => r.id)).toEqual(rooms.map((r) => r.id));
+    // Thứ tự danh sách: phòng chẵn vào dãy bắc (cửa quay về nam), phòng lẻ vào dãy tây (cửa quay về đông).
+    expect(campus.rooms.map((r) => r.facing)).toEqual(rooms.map((_, index) => (index % 2 === 0 ? "south" : "east")));
     // Cùng dữ liệu luôn cho cùng kết quả.
-    expect(layoutRooms(rooms)).toEqual({ rooms: placed, length });
+    expect(layoutCampus(rooms)).toEqual(campus);
 
-    for (const side of [-1, 1] as const) {
-      const row = placed.filter((p) => p.side === side).sort((x, y) => x.x - y.x);
-      for (const p of row) {
-        // Phòng nằm hẳn một bên hành lang, cửa sát mép hành lang.
-        expect(Math.abs(p.z) - p.depth / 2).toBeCloseTo(CORRIDOR_WIDTH / 2);
-        expect(Math.sign(p.z)).toBe(side);
+    const main = edges(campus.main);
+    const plaza = edges(campus.plaza);
+    for (const [index, placed] of campus.rooms.entries()) {
+      const box = edges(placed);
+      expect(placed.front).toBe(roomFront(rooms[index]!.capacity));
+      if (placed.facing === "south") {
+        // Mặt tiền thẳng hàng với mặt tiền tòa nhà chính, cách sân đúng một lối đi.
+        expect(placed).toMatchObject({ width: placed.front, depth: ROOM_DEPTH });
+        expect(box.maxZ).toBeCloseTo(main.maxZ);
+        expect(plaza.minZ - box.maxZ).toBeCloseTo(APRON);
+        expect(box.minX).toBeGreaterThanOrEqual(main.maxX + BUILDING_GAP - 1e-9);
+      } else {
+        expect(placed).toMatchObject({ width: ROOM_DEPTH, depth: placed.front });
+        expect(box.maxX).toBeCloseTo(main.maxX);
+        expect(plaza.minX - box.maxX).toBeCloseTo(APRON);
+        expect(box.minZ).toBeGreaterThanOrEqual(main.maxZ + BUILDING_GAP - 1e-9);
       }
-      // Hai phòng kề nhau trong một dãy cách nhau đúng một khe, không chồng lên nhau.
-      for (let i = 1; i < row.length; i++) {
-        const [left, right] = [row[i - 1]!, row[i]!];
-        expect(right.x - right.width / 2 - (left.x + left.width / 2)).toBeCloseTo(ROOM_GAP);
-      }
+      expect(inside(placed, campus.bounds)).toBe(true);
     }
-    // Canh giữa: dãy dài nhất trải từ -length/2 đến length/2.
-    const edges = placed.flatMap((p) => [p.x - p.width / 2, p.x + p.width / 2]);
-    expect(Math.min(...edges)).toBeCloseTo(-length / 2);
-    expect(Math.max(...edges)).toBeCloseTo(length / 2);
-  });
-
-  it("chỗ ngồi nằm trong phòng, chừa khoảng trước bảng, tối đa số chỗ được vẽ", () => {
-    expect(seatPositions(6, 6, 0)).toEqual([]);
-    expect(seatPositions(5, 6, 1)).toHaveLength(1);
-    for (const [width, capacity] of [[5, 4], [7, 12], [9, 20], [9, 60]] as const) {
-      const seats = seatPositions(width, 6, capacity);
-      expect(seats).toHaveLength(Math.min(capacity, MAX_SEATS));
-      for (const seat of seats) {
-        expect(Math.abs(seat.x)).toBeLessThanOrEqual(width / 2 - 0.5);
-        expect(seat.z).toBeGreaterThanOrEqual(-3 + 0.5);
-        expect(seat.z).toBeLessThanOrEqual(3 - 1.7);
-      }
-      // Không có hai chỗ trùng nhau.
-      expect(new Set(seats.map((seat) => `${seat.x.toFixed(3)}|${seat.z.toFixed(3)}`)).size).toBe(seats.length);
+    // Không tòa nhà nào chồng lên nhau, lên sân hay lên đường; hai con đường không chồng nhau.
+    const buildings: Rect[] = [campus.main, ...campus.rooms];
+    for (const [i, a] of buildings.entries()) {
+      for (const b of buildings.slice(i + 1)) expect(overlap(a, b)).toBe(false);
+      for (const open of [campus.plaza, campus.roads.south, campus.roads.east]) expect(overlap(a, open)).toBe(false);
     }
+    expect(overlap(campus.roads.south, campus.roads.east)).toBe(false);
+    expect(overlap(campus.plaza, campus.roads.south)).toBe(false);
+    expect(overlap(campus.plaza, campus.roads.east)).toBe(false);
+    for (const part of [campus.main, campus.plaza, campus.roads.south, campus.roads.east]) expect(inside(part, campus.bounds)).toBe(true);
+    expect(campus.bounds.x).toBeCloseTo(0);
+    expect(campus.bounds.z).toBeCloseTo(0);
   });
 });
 
-describe("giao diện 3D trung tâm: trạng thái phòng theo giờ", () => {
+describe("dashboard 3D: trạng thái phòng và tiến trình buổi học theo giờ", () => {
   const session = (id: string, startTime: string, endTime: string, extra: Partial<CenterSession> = {}): CenterSession => ({
     id,
     roomId: "r",
@@ -106,6 +131,26 @@ describe("giao diện 3D trung tâm: trạng thái phòng theo giờ", () => {
     const cancelled = [session("huy", "08:00", "09:30", { cancelled: true })];
     expect(at("08:30", cancelled)).toBe("idle:-");
     expect(at("08:30", [...cancelled, session("sau", "10:00", "11:30")])).toBe("upcoming:sau");
+  });
+
+  it("tiến trình của một buổi: phần thời gian đã trôi qua, từ 0 đến 1", () => {
+    const morning = day[1]!;
+    expect(minutesOf("08:30")).toBe(510);
+    expect(sessionProgress(morning, "07:00")).toBe(0);
+    expect(sessionProgress(morning, "08:00")).toBe(0);
+    expect(sessionProgress(morning, "08:45")).toBeCloseTo(0.5);
+    expect(sessionProgress(morning, "09:30")).toBe(1);
+    expect(sessionProgress(morning, "20:00")).toBe(1);
+  });
+
+  it("tiến trình của ngày: buổi xong tính trọn, buổi đang học tính theo thời gian, buổi hủy đếm riêng", () => {
+    const sessions = [...day, session("huy", "10:00", "11:00", { cancelled: true })];
+    expect(dayProgress([], "10:00")).toEqual({ total: 0, done: 0, live: 0, upcoming: 0, cancelled: 0, percent: 0 });
+    expect(dayProgress(sessions, "07:00")).toEqual({ total: 3, done: 0, live: 0, upcoming: 3, cancelled: 1, percent: 0 });
+    // 08:45: buổi sáng được một nửa → 0,5/3 ≈ 17%.
+    expect(dayProgress(sessions, "08:45")).toEqual({ total: 3, done: 0, live: 1, upcoming: 2, cancelled: 1, percent: 17 });
+    expect(dayProgress(sessions, "12:00")).toEqual({ total: 3, done: 1, live: 0, upcoming: 2, cancelled: 1, percent: 33 });
+    expect(dayProgress(sessions, "23:00")).toEqual({ total: 3, done: 3, live: 0, upcoming: 0, cancelled: 1, percent: 100 });
   });
 
   it("giờ hiện tại theo giờ Việt Nam, dạng HH:MM 24 giờ", () => {

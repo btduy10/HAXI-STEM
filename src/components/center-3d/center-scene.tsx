@@ -1,138 +1,260 @@
 "use client";
 
 import { OrbitControls, RoundedBox } from "@react-three/drei";
-import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
-import { CanvasTexture, SRGBColorSpace, Vector3 } from "three";
+import { type OrthographicCamera, Vector3 } from "three";
 import {
-  CORRIDOR_WIDTH,
+  type Campus,
   type CenterRoom,
   type CenterSession,
+  MAIN_DEPTH,
   ROOM_DEPTH,
   ROOM_STATE_LABELS,
-  type RoomPlacement,
   type RoomState,
-  seatPositions,
 } from "@/domain/center-3d";
 import { cn } from "@/lib/utils";
-import { FIGURE_COLORS, NAVY, ROOM_COLORS, TEAL } from "./palette";
+import logo from "../../../public/logo.png";
+import { ClassroomBuilding, MainBuilding, PAVEMENT, ROOM_TOP } from "./buildings";
+import { Arena, Crates, type FigureSpot, Figures, RoadDashes, Robot, type Spot, Trees } from "./scene-props";
+import { STATE_DOT, type SceneTheme, readSceneTheme } from "./theme";
 
-export type SceneRoom = { room: CenterRoom; placement: RoomPlacement; state: RoomState; session: CenterSession | null };
+export type SceneRoom = { room: CenterRoom; state: RoomState; session: CenterSession | null };
+/** Phần khung cảnh bị các thẻ nổi che (px): cảnh được canh vào vùng còn trống. */
+export type SceneInsets = { top: number; right: number; bottom: number; left: number };
+/** Lệnh điều khiển máy quay cho cột nút bên cạnh cảnh. */
+export type SceneApi = { zoomIn: () => void; zoomOut: () => void; rotate: () => void; reset: () => void; home: () => void };
 
-const LOBBY_LENGTH = 6;
-const WALL_HEIGHT = 1.3;
-const WALL_THICKNESS = 0.12;
-const DOOR_WIDTH = 1.3;
-const FLOOR_TOP = 0.1;
-const WOOD = "#d8b98c";
-const FOV = 40;
-/** Khung cảnh có tỉ lệ ngang:dọc tối thiểu này (xem `center-view`); dùng để tính khoảng cách máy quay ban đầu. */
-const MIN_ASPECT = 1.6;
-/** Góc nhìn ban đầu: lệch ngang về phía sảnh và nhìn chếch từ trên xuống (radian). */
-const AZIMUTH = -0.36;
-const ELEVATION = 0.76;
-/** Nhãn của phòng nằm phía trên phòng ở độ cao này. */
-const LABEL_HEIGHT = 2.9;
+// Góc nhìn isometric mặc định: từ hướng đông nam (chéo 45°), nghiêng khoảng 40° so với mặt đất.
+const AZIMUTH = Math.PI / 4;
+const ELEVATION = 0.7;
+const CAMERA_DISTANCE = 120;
+const MIN_ZOOM = 7;
+const MAX_ZOOM = 90;
+const UP = new Vector3(0, 1, 0);
+const defaultOffset = () =>
+  new Vector3(Math.sin(AZIMUTH) * Math.cos(ELEVATION), Math.sin(ELEVATION), Math.cos(AZIMUTH) * Math.cos(ELEVATION)).multiplyScalar(CAMERA_DISTANCE);
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+// Cấu hình máy quay ban đầu là hằng số: Canvas dựng lại (đồng hồ, chọn phòng) không đặt lại góc nhìn người dùng đang xem.
+const CAMERA = { position: defaultOffset().toArray(), zoom: 14, near: 1, far: 400 };
 
-/** Một bức tường thấp kèm nẹp màu trạng thái ở mép trên (nhìn từ trên xuống vẫn thấy màu phòng). */
-function Wall({ size, position, accent }: { size: [number, number]; position: [number, number]; accent: string }) {
-  const [width, depth] = size;
-  const [x, z] = position;
-  return (
-    <group position={[x, FLOOR_TOP, z]}>
-      <mesh position-y={WALL_HEIGHT / 2} castShadow receiveShadow>
-        <boxGeometry args={[width, WALL_HEIGHT, depth]} />
-        <meshStandardMaterial color="#ffffff" />
-      </mesh>
-      <mesh position-y={WALL_HEIGHT + 0.04}>
-        <boxGeometry args={[width, 0.08, depth]} />
-        <meshStandardMaterial color={accent} />
-      </mesh>
-    </group>
-  );
+type Controls = { target: Vector3; update: () => void; addEventListener: (type: string, listener: () => void) => void; removeEventListener: (type: string, listener: () => void) => void };
+type Motion = { offset: Vector3 | null; zoom: number | null; target: Vector3 | null };
+const STILL: Motion = { offset: null, zoom: null, target: null };
+
+/** Vị trí cây: dải đất phía tây và phía bắc sau các dãy nhà, lề ngoài hai con đường, và ba góc sân. */
+function treeSpots(campus: Campus): Spot[] {
+  const { bounds, plaza, main, roads } = campus;
+  const [minX, maxX, minZ, maxZ] = [bounds.x - bounds.width / 2, bounds.x + bounds.width / 2, bounds.z - bounds.depth / 2, bounds.z + bounds.depth / 2];
+  const roadTop = roads.south.z - roads.south.depth / 2;
+  const roadLeft = roads.east.x - roads.east.width / 2;
+  const spots: Spot[] = [];
+  // Dải phía tây: hai hàng so le ở đoạn phía nam tòa nhà chính.
+  const mainSouth = main.z + main.depth / 2;
+  for (let z = mainSouth + 2.2; z < roadTop - 1.5; z += 4.4) {
+    spots.push({ x: minX + 1.5, z }, { x: minX + 4.3, z: z + 2.2 });
+  }
+  // Dải phía bắc: sau dãy phòng phía bắc.
+  const mainEast = main.x + main.width / 2;
+  for (let x = mainEast + 2.4; x < roadLeft - 1.5; x += 4.6) spots.push({ x, z: minZ + 1.4 });
+  // Lề ngoài đường nam và đường đông.
+  for (let x = minX + 2.5; x < maxX - 1.5; x += 6.5) spots.push({ x, z: maxZ - 1.15 });
+  for (let z = minZ + 3; z < roadTop - 2; z += 6.5) spots.push({ x: maxX - 1.15, z });
+  // Góc sân.
+  const [plazaMaxX, plazaMaxZ] = [plaza.x + plaza.width / 2, plaza.z + plaza.depth / 2];
+  spots.push({ x: plazaMaxX - 1.4, z: plazaMaxZ - 1.4 }, { x: plazaMaxX - 1.4, z: plaza.z - plaza.depth / 2 + 1.4 }, { x: plaza.x - plaza.width / 2 + 1.4, z: plazaMaxZ - 1.4 });
+  return spots.filter((spot) => spot.z < roadTop - 0.9 || spot.z > roads.south.z + roads.south.depth / 2);
 }
 
-/** Hình người đơn giản: thân trụ bo tròn và đầu. `height` là chiều cao tới đỉnh đầu. */
-function Figure({ position, color, height = 1.05 }: { position: [number, number, number]; color: string; height?: number }) {
-  const head = 0.16;
-  const body = height - head * 2;
+/** Nền khuôn viên: đất, vỉa hè, thảm xanh sau các dãy nhà, sân có viền vàng đồng nhạt và hai con đường. */
+function Ground({ campus, theme, shadows }: { campus: Campus; theme: SceneTheme; shadows: boolean }) {
+  const { bounds, plaza, roads, main } = campus;
+  const [minX, minZ] = [bounds.x - bounds.width / 2, bounds.z - bounds.depth / 2];
+  const roadTop = roads.south.z - roads.south.depth / 2;
+  const roadLeft = roads.east.x - roads.east.width / 2;
+  // Vỉa hè phủ toàn bộ phần phía trong hai con đường.
+  const paved = { x: (minX + roadLeft) / 2, z: (minZ + roadTop) / 2, width: roadLeft - minX - 0.8, depth: roadTop - minZ - 0.8 };
+  const mainSouth = main.z + main.depth / 2;
+  const mainEast = main.x + main.width / 2;
+  const gardenWest = { fromX: minX + 0.6, toX: main.x - main.width / 2 + (main.width - ROOM_DEPTH) - 0.6, fromZ: mainSouth + 0.8, toZ: roadTop - 0.8 };
+  const gardenNorth = { fromX: mainEast + 0.8, toX: roadLeft - 0.8, fromZ: minZ + 0.6, toZ: main.z - main.depth / 2 + (main.depth - ROOM_DEPTH) - 0.6 };
+  const edge = 0.14;
   return (
-    <group position={position}>
-      <mesh position-y={body / 2} castShadow>
-        <capsuleGeometry args={[0.17, Math.max(body - 0.34, 0.05), 4, 10]} />
-        <meshStandardMaterial color={color} />
+    <group>
+      <RoundedBox args={[bounds.width, 0.7, bounds.depth]} radius={0.3} position={[bounds.x, -0.35, bounds.z]} receiveShadow={shadows}>
+        <meshStandardMaterial color={theme.ground} />
+      </RoundedBox>
+      <mesh position={[paved.x, PAVEMENT / 2, paved.z]} receiveShadow={shadows}>
+        <boxGeometry args={[paved.width, PAVEMENT, paved.depth]} />
+        <meshStandardMaterial color={theme.trim} />
       </mesh>
-      <mesh position-y={body + head * 0.85} castShadow>
-        <sphereGeometry args={[head, 16, 12]} />
-        <meshStandardMaterial color="#f3d2b3" />
-      </mesh>
-    </group>
-  );
-}
-
-function Room({ item, selected, onSelect }: { item: SceneRoom; selected: boolean; onSelect: (id: string) => void }) {
-  const { room, placement: p, state, session } = item;
-  const [hovered, setHovered] = useState(false);
-  const colors = ROOM_COLORS[state];
-  const seats = useMemo(() => seatPositions(p.width, p.depth, room.capacity), [p.width, p.depth, room.capacity]);
-  const live = state === "live";
-  // Phòng đang học: mỗi học viên của lớp một hình người, tối đa bằng số chỗ được vẽ.
-  const students = live ? Math.min(session?.studentCount ?? 0, seats.length) : 0;
-  const doorSegment = (p.width - DOOR_WIDTH) / 2;
-  const pick = (event: ThreeEvent<MouseEvent>) => {
-    event.stopPropagation();
-    onSelect(room.id);
-  };
-  const hover = (value: boolean) => (event: ThreeEvent<PointerEvent>) => {
-    event.stopPropagation();
-    setHovered(value);
-    document.body.style.cursor = value ? "pointer" : "";
-  };
-
-  return (
-    // Trong hệ tọa độ của phòng: cửa ở phía z âm (quay về hành lang), bảng ở phía z dương.
-    <group position={[p.x, 0, p.z]} rotation-y={p.side === 1 ? 0 : Math.PI}>
-      {selected && (
-        <mesh position-y={0.02}>
-          <boxGeometry args={[p.width + 0.5, 0.04, p.depth + 0.5]} />
-          <meshStandardMaterial color={NAVY} />
-        </mesh>
+      {[gardenWest, gardenNorth].map(
+        (garden, index) =>
+          garden.toX - garden.fromX > 1 &&
+          garden.toZ - garden.fromZ > 1 && (
+            <mesh key={index} position={[(garden.fromX + garden.toX) / 2, PAVEMENT + 0.012, (garden.fromZ + garden.toZ) / 2]} receiveShadow={shadows}>
+              <boxGeometry args={[garden.toX - garden.fromX, 0.024, garden.toZ - garden.fromZ]} />
+              <meshStandardMaterial color={theme.primarySoft} />
+            </mesh>
+          ),
       )}
-      <mesh position-y={FLOOR_TOP / 2} receiveShadow onClick={pick} onPointerOver={hover(true)} onPointerOut={hover(false)}>
-        <boxGeometry args={[p.width, FLOOR_TOP, p.depth]} />
-        <meshStandardMaterial color={colors.floor} emissive={colors.accent} emissiveIntensity={hovered ? 0.18 : live ? 0.06 : 0} />
+      {/* Sân trung tâm: nền sáng hơn, viền vàng đồng nhạt. */}
+      <mesh position={[plaza.x, PAVEMENT + 0.012, plaza.z]} receiveShadow={shadows}>
+        <boxGeometry args={[plaza.width, 0.024, plaza.depth]} />
+        <meshStandardMaterial color={theme.plaza} />
       </mesh>
-
-      <Wall size={[p.width, WALL_THICKNESS]} position={[0, p.depth / 2 - WALL_THICKNESS / 2]} accent={colors.accent} />
-      <Wall size={[WALL_THICKNESS, p.depth]} position={[p.width / 2 - WALL_THICKNESS / 2, 0]} accent={colors.accent} />
-      <Wall size={[WALL_THICKNESS, p.depth]} position={[-p.width / 2 + WALL_THICKNESS / 2, 0]} accent={colors.accent} />
-      {[-1, 1].map((sign) => (
-        <Wall
-          key={sign}
-          size={[doorSegment, WALL_THICKNESS]}
-          position={[sign * (DOOR_WIDTH / 2 + doorSegment / 2), -p.depth / 2 + WALL_THICKNESS / 2]}
-          accent={colors.accent}
-        />
+      {[
+        { x: plaza.x, z: plaza.z - plaza.depth / 2, width: plaza.width, depth: edge },
+        { x: plaza.x, z: plaza.z + plaza.depth / 2, width: plaza.width, depth: edge },
+        { x: plaza.x - plaza.width / 2, z: plaza.z, width: edge, depth: plaza.depth },
+        { x: plaza.x + plaza.width / 2, z: plaza.z, width: edge, depth: plaza.depth },
+      ].map((line, index) => (
+        <mesh key={index} position={[line.x, PAVEMENT + 0.03, line.z]}>
+          <boxGeometry args={[line.width, 0.02, line.depth]} />
+          <meshStandardMaterial color={theme.roadLine} />
+        </mesh>
       ))}
-
-      {/* Bảng trên tường cuối phòng. */}
-      <mesh position={[0, FLOOR_TOP + 0.75, p.depth / 2 - WALL_THICKNESS - 0.03]}>
-        <boxGeometry args={[Math.min(p.width - 1.6, 3.4), 0.8, 0.05]} />
-        <meshStandardMaterial color={live ? "#ffffff" : "#f1f5f9"} emissive="#ffffff" emissiveIntensity={live ? 0.25 : 0} />
-      </mesh>
-
-      {seats.map((seat, index) => (
-        <group key={index} position={[seat.x, FLOOR_TOP, seat.z]}>
-          <mesh position-y={0.3} castShadow receiveShadow>
-            <boxGeometry args={[0.78, 0.6, 0.42]} />
-            <meshStandardMaterial color={WOOD} />
-          </mesh>
-          {index < students && <Figure position={[0, 0, -0.42]} color={FIGURE_COLORS[index % FIGURE_COLORS.length]!} />}
-        </group>
+      {[roads.south, roads.east].map((road, index) => (
+        <mesh key={index} position={[road.x, 0.03, road.z]} receiveShadow={shadows}>
+          <boxGeometry args={[road.width, 0.06, road.depth]} />
+          <meshStandardMaterial color={theme.road} />
+        </mesh>
       ))}
-      {live && session?.teacherName && <Figure position={[Math.min(1.1, p.width / 2 - 0.8), FLOOR_TOP, p.depth / 2 - 0.95]} color={NAVY} height={1.45} />}
+      <RoadDashes roads={[roads.south, roads.east]} theme={theme} />
     </group>
   );
+}
+
+/**
+ * Điều khiển máy quay trực giao: canh cảnh vào vùng không bị thẻ nổi che, thực hiện các lệnh của cột nút (phóng to, thu nhỏ,
+ * xoay, đặt lại, về tòa nhà chính), lia tới phòng được chọn khi nó nằm sát mép, và giữ điểm nhìn trong phạm vi khuôn viên.
+ */
+function CameraRig({
+  campus,
+  insets,
+  apiRef,
+  focus,
+  animate,
+}: {
+  campus: Campus;
+  insets: SceneInsets;
+  apiRef: RefObject<SceneApi | null>;
+  /** Tâm (x, z) của phòng đang chọn. */
+  focus: [number, number] | null;
+  animate: boolean;
+}) {
+  const invalidate = useThree((state) => state.invalidate);
+  const get = useThree((state) => state.get);
+  const size = useThree((state) => state.size);
+  const controls = useThree((state) => state.controls);
+  const motion = useRef<Motion>(STILL);
+  const fit = useRef({ key: "", zoom: 14, ready: false });
+  const pendingFocus = useRef<Vector3 | null>(null);
+  const fitKey = `${size.width}x${size.height}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${campus.bounds.width}x${campus.bounds.depth}`;
+
+  useEffect(() => invalidate(), [fitKey, invalidate]);
+  useEffect(() => {
+    pendingFocus.current = focus ? new Vector3(focus[0], 0, focus[1]) : null;
+    invalidate();
+  }, [focus, invalidate]);
+  // Người dùng tự kéo hoặc lăn chuột thì dừng mọi chuyển động đang chạy.
+  useEffect(() => {
+    const orbit = controls as unknown as Controls | null;
+    if (!orbit) return;
+    const stop = () => {
+      motion.current = STILL;
+    };
+    orbit.addEventListener("start", stop);
+    return () => orbit.removeEventListener("start", stop);
+  }, [controls]);
+  useEffect(() => {
+    const go = (next: Partial<Motion>) => {
+      motion.current = { ...motion.current, ...next };
+      invalidate();
+    };
+    const zoomTo = (factor: number) => go({ zoom: clamp((motion.current.zoom ?? get().camera.zoom) * factor, MIN_ZOOM, MAX_ZOOM) });
+    const mainFront = new Vector3(campus.main.x, 0, campus.main.z + MAIN_DEPTH / 2 + 2);
+    apiRef.current = {
+      zoomIn: () => zoomTo(1.3),
+      zoomOut: () => zoomTo(1 / 1.3),
+      rotate: () => {
+        const orbit = get().controls as unknown as Controls | null;
+        const from = motion.current.offset ?? (orbit ? get().camera.position.clone().sub(orbit.target) : defaultOffset());
+        go({ offset: from.clone().applyAxisAngle(UP, Math.PI / 4) });
+      },
+      reset: () => go({ offset: defaultOffset(), zoom: fit.current.zoom, target: new Vector3(0, 0, 0) }),
+      home: () => go({ offset: defaultOffset(), zoom: clamp(fit.current.zoom * 1.9, MIN_ZOOM, MAX_ZOOM), target: mainFront }),
+    };
+    return () => {
+      apiRef.current = null;
+    };
+  }, [apiRef, campus, get, invalidate]);
+
+  useFrame((state) => {
+    const camera = state.camera as OrthographicCamera;
+    // Canh cảnh vào vùng trống của khung: tính mức zoom vừa khuôn viên và dời khung nhìn theo phần bị thẻ che.
+    if (fit.current.key !== fitKey) {
+      const clearWidth = Math.max(size.width - insets.left - insets.right, 160);
+      const clearHeight = Math.max(size.height - insets.top - insets.bottom, 160);
+      const span = campus.bounds.width + campus.bounds.depth;
+      const across = span * Math.SQRT1_2;
+      const upward = span * Math.SQRT1_2 * Math.sin(ELEVATION) + 9 * Math.cos(ELEVATION);
+      const zoom = clamp(Math.min(clearWidth / across, clearHeight / upward) * 0.95, MIN_ZOOM, MAX_ZOOM);
+      const shiftX = insets.left + clearWidth / 2 - size.width / 2;
+      // Nhà cao lên phía trên mặt đất nên cả cảnh được hạ xuống một chút cho cân.
+      const shiftY = insets.top + clearHeight / 2 - size.height / 2 + clearHeight * 0.03;
+      camera.setViewOffset(size.width, size.height, -shiftX, -shiftY, size.width, size.height);
+      if (!fit.current.ready) camera.zoom = zoom;
+      camera.updateProjectionMatrix();
+      fit.current = { key: fitKey, zoom, ready: true };
+    }
+    const orbit = state.controls as unknown as Controls | null;
+    if (!orbit) return;
+
+    // Phòng vừa được chọn: chỉ lia tới khi nó nằm sát mép hoặc ngoài khung nhìn.
+    if (pendingFocus.current) {
+      const seen = pendingFocus.current.clone().project(camera);
+      if (Math.abs(seen.x) > 0.7 || Math.abs(seen.y) > 0.7) motion.current = { ...motion.current, target: pendingFocus.current };
+      pendingFocus.current = null;
+    }
+
+    const move = motion.current;
+    const ease = animate ? 0.16 : 1;
+    if (move.target) {
+      const step = move.target.clone().sub(orbit.target);
+      const arrived = step.length() < 0.03 || !animate;
+      if (!arrived) step.multiplyScalar(ease);
+      camera.position.add(step);
+      orbit.target.add(step);
+      if (arrived) motion.current = { ...motion.current, target: null };
+    }
+    if (move.offset) {
+      const current = camera.position.clone().sub(orbit.target);
+      const arrived = current.angleTo(move.offset) < 0.004 || !animate;
+      if (arrived) current.copy(move.offset);
+      else current.lerp(move.offset, ease).setLength(CAMERA_DISTANCE);
+      camera.position.copy(orbit.target).add(current);
+      if (arrived) motion.current = { ...motion.current, offset: null };
+    }
+    if (move.zoom !== null) {
+      const arrived = Math.abs(move.zoom - camera.zoom) < 0.03 || !animate;
+      camera.zoom = arrived ? move.zoom : camera.zoom + (move.zoom - camera.zoom) * ease;
+      camera.updateProjectionMatrix();
+      if (arrived) motion.current = { ...motion.current, zoom: null };
+    }
+    // Điểm nhìn không ra khỏi khuôn viên (kéo chuột phải quá tay).
+    const limitX = campus.bounds.width / 2;
+    const limitZ = campus.bounds.depth / 2;
+    const back = new Vector3(clamp(orbit.target.x, -limitX, limitX) - orbit.target.x, -orbit.target.y, clamp(orbit.target.z, -limitZ, limitZ) - orbit.target.z);
+    if (back.lengthSq() > 1e-6) {
+      camera.position.add(back);
+      orbit.target.add(back);
+    }
+    orbit.update();
+    const { offset, zoom, target } = motion.current;
+    if (offset || zoom !== null || target) state.invalidate();
+  });
+  return null;
 }
 
 /**
@@ -162,332 +284,211 @@ function RoomLabel({
       aria-pressed={selected}
       aria-label={`${room.name}: ${ROOM_STATE_LABELS[state]}${shown ? `, ${shown.className}` : ""}`}
       className={cn(
-        "pointer-events-auto invisible absolute top-0 left-0 grid w-max max-w-56 origin-center gap-0.5 rounded-xl border bg-white/95 px-2.5 py-1.5 text-left text-xs leading-tight text-slate-900 shadow-md outline-none select-none",
-        "focus-visible:ring-3 focus-visible:ring-sky-500/60",
-        selected ? "border-slate-900" : "border-slate-200",
+        "pointer-events-auto invisible absolute top-0 left-0 grid w-max max-w-52 origin-bottom gap-0.5 rounded-xl border bg-card px-2.5 py-1.5 text-left text-xs leading-tight text-foreground shadow-panel outline-none select-none",
+        "focus-visible:ring-3 focus-visible:ring-ring/60",
+        selected ? "border-primary ring-2 ring-primary/30" : "border-transparent",
       )}
     >
       <span className="flex items-center gap-1.5 font-semibold">
-        <span aria-hidden className="size-2 shrink-0 rounded-full" style={{ backgroundColor: ROOM_COLORS[state].accent }} />
+        <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STATE_DOT[state])} />
         <span className="truncate">{room.name}</span>
       </span>
       {shown && detailed ? (
         <>
           <span className="truncate">{shown.className}</span>
-          <span className="truncate text-slate-600">
+          <span className="truncate text-ink-soft">
             {shown.startTime}–{shown.endTime}
             {shown.teacherName ? ` · ${shown.teacherName}` : ""}
           </span>
           {shown.studentCount !== null && (
-            <span className="text-slate-600">
+            <span className="text-ink-soft">
               Sĩ số {shown.studentCount}/{room.capacity}
             </span>
           )}
         </>
       ) : shown ? (
-        <span className="truncate text-slate-600">
+        <span className="truncate text-ink-soft">
           {shown.startTime} · {shown.className}
         </span>
       ) : (
-        <span className="text-slate-600">{ROOM_STATE_LABELS[state]}</span>
+        <span className="text-ink-soft">{ROOM_STATE_LABELS[state]}</span>
       )}
     </button>
   );
 }
 
 /**
- * Mỗi khung hình: chiếu vị trí từng phòng lên màn hình rồi dời nhãn HTML của phòng tới đó, co giãn theo khoảng cách;
- * phòng gần máy quay hơn nằm trên. Nhãn của phòng ra ngoài khung nhìn thì ẩn.
+ * Mỗi khung hình: chiếu điểm phía trên mái từng phòng lên màn hình rồi dời nhãn HTML của phòng tới đó (đáy nhãn chạm điểm ấy),
+ * co giãn theo mức zoom; phòng gần máy quay hơn nằm trên. Nhãn của phòng ra ngoài khung nhìn thì ẩn.
  */
-function LabelProjector({
-  rooms,
-  labels,
-  reference,
-}: {
-  rooms: SceneRoom[];
-  labels: RefObject<Map<string, HTMLElement>>;
-  /** Khoảng cách mà ở đó nhãn có cỡ chữ thường. */
-  reference: number;
-}) {
+function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number; z: number }[]; labels: RefObject<Map<string, HTMLElement>> }) {
   const invalidate = useThree((state) => state.invalidate);
   // Danh sách phòng đổi (nhãn mới được gắn): vẽ lại một khung hình để đặt vị trí.
-  useEffect(() => invalidate(), [rooms, invalidate]);
+  useEffect(() => invalidate(), [anchors, invalidate]);
   useFrame(({ camera, size }) => {
     const point = new Vector3();
-    for (const { room, placement } of rooms) {
-      const element = labels.current.get(room.id);
+    const scale = clamp(camera.zoom / 15, 0.82, 1.1);
+    for (const anchor of anchors) {
+      const element = labels.current.get(anchor.id);
       if (!element) continue;
-      point.set(placement.x, LABEL_HEIGHT, placement.z);
-      const distance = camera.position.distanceTo(point);
-      point.project(camera);
-      const inView = point.z < 1 && Math.abs(point.x) < 1.15 && Math.abs(point.y) < 1.15;
+      point.set(anchor.x, ROOM_TOP + 1.25, anchor.z).project(camera);
+      const inView = Math.abs(point.z) < 1 && Math.abs(point.x) < 1.1 && Math.abs(point.y) < 1.1;
       element.style.visibility = inView ? "visible" : "hidden";
       if (!inView) continue;
       const x = (point.x * 0.5 + 0.5) * size.width;
       const y = (-point.y * 0.5 + 0.5) * size.height;
-      const scale = Math.min(1, Math.max(0.6, (reference * 0.9) / distance));
-      element.style.transform = `translate(-50%, -50%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(3)})`;
-      element.style.zIndex = String(Math.max(1, Math.round(2000 - distance * 20)));
+      element.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(3)})`;
+      element.style.zIndex = String(Math.max(1, Math.round((1 - point.z) * 500)));
     }
   });
   return null;
 }
 
-/** Biển tên ở sảnh: chữ vẽ lên canvas 2D rồi dán làm vân bề mặt (không tải phông chữ hay tệp nào từ ngoài). */
-function useSignTexture() {
-  const texture = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1024;
-    canvas.height = 320;
-    const context = canvas.getContext("2d");
-    if (context) {
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillStyle = NAVY;
-      context.font = "800 150px system-ui, 'Segoe UI', Roboto, sans-serif";
-      context.fillText("HAXI STEM", canvas.width / 2, 125);
-      context.fillStyle = TEAL;
-      context.font = "600 62px system-ui, 'Segoe UI', Roboto, sans-serif";
-      context.fillText("Trung tâm Robotics", canvas.width / 2, 250);
-    }
-    const result = new CanvasTexture(canvas);
-    result.colorSpace = SRGBColorSpace;
-    result.anisotropy = 4;
-    return result;
-  }, []);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return texture;
-}
-
-/** Robot nhỏ đứng ở sảnh. */
-function Robot({ position }: { position: [number, number, number] }) {
-  return (
-    <group position={position}>
-      <RoundedBox args={[0.6, 0.7, 0.45]} radius={0.08} position-y={0.55} castShadow>
-        <meshStandardMaterial color="#4dd0c0" />
-      </RoundedBox>
-      <RoundedBox args={[0.5, 0.4, 0.4]} radius={0.08} position-y={1.15} castShadow>
-        <meshStandardMaterial color="#ffffff" />
-      </RoundedBox>
-      {[-0.11, 0.11].map((x) => (
-        <mesh key={x} position={[x, 1.17, 0.21]}>
-          <sphereGeometry args={[0.05, 12, 10]} />
-          <meshStandardMaterial color={NAVY} />
-        </mesh>
-      ))}
-      <mesh position-y={1.45}>
-        <cylinderGeometry args={[0.015, 0.015, 0.2, 6]} />
-        <meshStandardMaterial color={NAVY} />
-      </mesh>
-      <mesh position-y={1.57}>
-        <sphereGeometry args={[0.05, 12, 10]} />
-        <meshStandardMaterial color="#f2b84b" emissive="#f2b84b" emissiveIntensity={0.5} />
-      </mesh>
-      {[-0.17, 0.17].map((x) => (
-        <mesh key={x} position={[x, 0.1, 0]} castShadow>
-          <boxGeometry args={[0.18, 0.2, 0.3]} />
-          <meshStandardMaterial color={NAVY} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-function Plant({ position }: { position: [number, number, number] }) {
-  return (
-    <group position={position}>
-      <mesh position-y={0.25} castShadow>
-        <cylinderGeometry args={[0.22, 0.17, 0.5, 12]} />
-        <meshStandardMaterial color="#c98f5d" />
-      </mesh>
-      <mesh position-y={0.95} castShadow>
-        <sphereGeometry args={[0.48, 14, 12]} />
-        <meshStandardMaterial color="#5fae86" />
-      </mesh>
-    </group>
-  );
-}
-
-/** Sảnh ở đầu hành lang: biển tên, quầy lễ tân, robot và chậu cây. `x` là tâm sảnh. */
-function Lobby({ x }: { x: number }) {
-  const sign = useSignTexture();
-  return (
-    <group position={[x, FLOOR_TOP, 0]}>
-      <group position={[0, 0, -ROOM_DEPTH / 2 - 0.4]}>
-        {[-1.7, 1.7].map((post) => (
-          <mesh key={post} position={[post, 0.9, 0]} castShadow>
-            <boxGeometry args={[0.12, 1.8, 0.12]} />
-            <meshStandardMaterial color={NAVY} />
-          </mesh>
-        ))}
-        <mesh position-y={2.35} castShadow>
-          <boxGeometry args={[4.4, 1.5, 0.14]} />
-          <meshStandardMaterial color={NAVY} />
-        </mesh>
-        <mesh position={[0, 2.35, 0.08]}>
-          <planeGeometry args={[4.16, 1.3]} />
-          <meshBasicMaterial map={sign} toneMapped={false} />
-        </mesh>
-      </group>
-      <RoundedBox args={[2.6, 1, 0.8]} radius={0.1} position={[0, 0.5, -0.6]} castShadow receiveShadow>
-        <meshStandardMaterial color={TEAL} />
-      </RoundedBox>
-      <Figure position={[0, 0, -1.25]} color="#f2b84b" height={1.5} />
-      <Robot position={[1.9, 0, 0.9]} />
-      <Plant position={[-2.2, 0, -1.7]} />
-      <Plant position={[-2.2, 0, 2.2]} />
-    </group>
-  );
-}
-
-type Controls = { target: Vector3; update: () => void };
-
 /**
- * Phòng được chọn nằm sát mép hoặc ngoài khung nhìn thì lia máy quay tới: dời điểm nhìn và máy quay cùng một đoạn nên
- * góc nhìn giữ nguyên. Phòng đang nằm gọn trong khung thì không dời (các phòng khác không bị đẩy ra ngoài).
- */
-function Focus({ goal, animate }: { goal: [number, number, number] | null; animate: boolean }) {
-  const invalidate = useThree((state) => state.invalidate);
-  const pending = useRef<{ target: Vector3; checked: boolean } | null>(null);
-  useEffect(() => {
-    pending.current = goal ? { target: new Vector3(...goal), checked: false } : null;
-    invalidate();
-  }, [goal, invalidate]);
-  useFrame((state) => {
-    const move = pending.current;
-    const controls = state.controls as unknown as Controls | null;
-    if (!move || !controls) return;
-    if (!move.checked) {
-      move.checked = true;
-      const seen = move.target.clone().project(state.camera);
-      if (seen.z < 1 && Math.abs(seen.x) < 0.72 && Math.abs(seen.y) < 0.72) {
-        pending.current = null;
-        return;
-      }
-    }
-    const step = move.target.clone().sub(controls.target);
-    const arrived = !animate || step.length() < 0.03;
-    if (!arrived) step.multiplyScalar(0.14);
-    state.camera.position.add(step);
-    controls.target.add(step);
-    controls.update();
-    if (arrived) pending.current = null;
-    else state.invalidate();
-  });
-  return null;
-}
-
-/**
- * Cảnh 3D của trung tâm: sảnh, hành lang và các phòng học theo `layoutRooms`. Chỉ để xem: bấm phòng (hoặc nhãn của phòng)
- * để chọn; việc mở buổi học nằm ở bảng bên cạnh. Chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
+ * Cảnh 3D isometric của trung tâm: tòa nhà chính, các phòng học theo `layoutCampus`, sân, đường, cây, robot.
+ * Chỉ để xem: bấm phòng (hoặc nhãn của phòng) để chọn; việc mở buổi học nằm ở thẻ chi tiết. Màu lấy từ CSS variable của ứng dụng.
+ * Chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
  */
 export function CenterScene({
+  campus,
   rooms,
-  length,
   selectedId,
   onSelect,
+  insets,
+  apiRef,
+  onReady,
 }: {
+  campus: Campus;
   rooms: SceneRoom[];
-  /** Chiều dài dãy phòng dài nhất (từ `layoutRooms`). */
-  length: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  insets: SceneInsets;
+  apiRef: RefObject<SceneApi | null>;
+  /** Gọi khi khung hình đầu tiên đã sẵn sàng (để tắt màn hình chờ). */
+  onReady: () => void;
 }) {
+  const [theme] = useState(readSceneTheme);
   const [reducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  // Sảnh nằm trước dãy phòng theo trục X; nền bao cả sảnh và hai dãy phòng.
-  const lobbyX = -length / 2 - LOBBY_LENGTH / 2;
-  const spanX = length + LOBBY_LENGTH + 3;
-  const spanZ = CORRIDOR_WIDTH + ROOM_DEPTH * 2 + 3;
-  const centerX = -LOBBY_LENGTH / 2;
-  // Khoảng cách máy quay để cả nền nằm gọn trong khung, tính cho khung hẹp nhất (tỉ lệ MIN_ASPECT).
-  const [sin, cos] = [Math.sin(Math.abs(AZIMUTH)), Math.cos(AZIMUTH)];
-  const halfFov = (FOV * Math.PI) / 360;
-  const across = spanX * cos + spanZ * sin;
-  const upward = (spanZ * cos + spanX * sin) * Math.sin(ELEVATION) + 3 * Math.cos(ELEVATION);
-  const distance = Math.max(across / 2 / (Math.tan(halfFov) * MIN_ASPECT), upward / 2 / Math.tan(halfFov)) * 1.04 + spanZ * 0.1;
-  // Phần cảnh gần máy quay trông lớn hơn nên điểm nhìn dời một chút về phía máy quay cho cảnh cân trong khung.
-  const lead = spanZ * 0.12;
-  const lookAtX = centerX + Math.sin(AZIMUTH) * lead;
-  const lookAtZ = cos * lead;
-  const cameraPosition: [number, number, number] = [
-    lookAtX + distance * Math.sin(AZIMUTH) * Math.cos(ELEVATION),
-    distance * Math.sin(ELEVATION),
-    lookAtZ + distance * cos * Math.cos(ELEVATION),
+  // Máy yếu (ít nhân xử lý hoặc ít bộ nhớ theo trình duyệt báo): tắt bóng đổ và vẽ ở độ phân giải gốc.
+  const [lowEnd] = useState(() => {
+    const device = navigator as Navigator & { deviceMemory?: number };
+    return (device.hardwareConcurrency ?? 8) <= 4 || (device.deviceMemory ?? 8) <= 4;
+  });
+  const shadows = !lowEnd;
+  const placementOf = useMemo(() => new Map(campus.rooms.map((placement) => [placement.id, placement])), [campus]);
+  const trees = useMemo(() => treeSpots(campus), [campus]);
+  const anchors = useMemo(() => campus.rooms.map(({ id, x, z }) => ({ id, x, z })), [campus]);
+  const selected = selectedId ? placementOf.get(selectedId) : undefined;
+  const focus = useMemo<[number, number] | null>(() => (selected ? [selected.x, selected.z] : null), [selected]);
+
+  const arena = { x: campus.plaza.x + 0.5, z: campus.plaza.z + 0.8 };
+  // Hình người: vài người đứng quanh sa bàn, và trước cửa mỗi phòng đang học là giáo viên cùng nhóm học viên theo sĩ số (tối đa 8).
+  const shirts = [theme.gold, theme.goldSoft, theme.teal];
+  const figures: FigureSpot[] = [
+    { x: arena.x - 1.2, z: arena.z - 2.7, color: theme.gold, height: 1.6 },
+    { x: arena.x + 1.4, z: arena.z - 2.8, color: theme.teal, height: 1.6 },
   ];
-  // Đèn chiếu về gốc tọa độ; vùng đổ bóng phủ cả nền dù cảnh lệch về phía sảnh.
-  const shadowReach = Math.max(spanX, spanZ) / 2 + LOBBY_LENGTH;
-  const target = useMemo<[number, number, number]>(() => [lookAtX, 0, lookAtZ], [lookAtX, lookAtZ]);
-  const selected = rooms.find((item) => item.room.id === selectedId);
-  const goal = useMemo<[number, number, number] | null>(
-    () => (selected ? [selected.placement.x, 0, selected.placement.z] : null),
-    [selected],
-  );
+  for (const item of rooms) {
+    const placement = placementOf.get(item.room.id);
+    if (!placement || item.state !== "live" || !item.session) continue;
+    const local: { x: number; z: number; color: string; height: number }[] = [];
+    if (item.session.teacherName) local.push({ x: -1.9, z: ROOM_DEPTH / 2 + 1, color: theme.ink, height: 2 });
+    const count = Math.min(item.session.studentCount ?? 0, 8);
+    for (let index = 0; index < count; index++) {
+      local.push({ x: ((index % 4) - 1.5) * 0.85 + 1.2, z: ROOM_DEPTH / 2 + 1.05 + Math.floor(index / 4) * 0.85, color: shirts[index % shirts.length]!, height: 1.55 });
+    }
+    // Tọa độ riêng của tòa nhà (mặt tiền quay về +Z) đổi sang tọa độ khuôn viên theo hướng cửa.
+    for (const spot of local) {
+      figures.push(
+        placement.facing === "south"
+          ? { ...spot, x: placement.x + spot.x, z: placement.z + spot.z }
+          : { ...spot, x: placement.x + spot.z, z: placement.z - spot.x },
+      );
+    }
+  }
+
   const labels = useRef(new Map<string, HTMLElement>());
   const register = (id: string, element: HTMLButtonElement | null) => {
     if (element) labels.current.set(id, element);
     else labels.current.delete(id);
   };
+  const reach = Math.max(campus.bounds.width, campus.bounds.depth) / 2 + 8;
 
   return (
     <div className="absolute inset-0">
       <Canvas
-        shadows="percentage"
+        orthographic
+        // Không tone mapping: màu vật liệu hiện đúng như token màu của ứng dụng.
+        flat
+        shadows={shadows ? "percentage" : false}
         frameloop="demand"
-        dpr={[1, 2]}
-        camera={{ position: cameraPosition, fov: FOV, near: 0.5, far: 400 }}
-        aria-label="Mô hình 3D trung tâm HAXI STEM"
+        dpr={lowEnd ? 1 : [1, 2]}
+        camera={CAMERA}
+        onCreated={onReady}
+        aria-label="Mô hình 3D isometric của trung tâm HAXI STEM"
       >
-      <ambientLight intensity={1.35} />
-      <hemisphereLight args={["#ffffff", "#cfe5e1", 0.9]} />
-      <directionalLight
-        position={[14, 26, 16]}
-        intensity={2.1}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-left={-shadowReach}
-        shadow-camera-right={shadowReach}
-        shadow-camera-top={shadowReach}
-        shadow-camera-bottom={-shadowReach}
-        shadow-camera-near={1}
-        shadow-camera-far={120}
-        shadow-bias={-0.0005}
-      />
+        {/* Ánh sáng mềm, ấm: nắng từ hướng tây nam nên mặt tiền phía nam sáng, bóng đổ nhẹ về đông bắc. */}
+        <ambientLight intensity={1.75} />
+        <hemisphereLight args={["#ffffff", theme.ground, 0.45]} />
+        <directionalLight
+          position={[-22, 34, 18]}
+          intensity={1.25}
+          color="#fff6e8"
+          castShadow={shadows}
+          shadow-mapSize={[2048, 2048]}
+          shadow-camera-left={-reach}
+          shadow-camera-right={reach}
+          shadow-camera-top={reach}
+          shadow-camera-bottom={-reach}
+          shadow-camera-near={1}
+          shadow-camera-far={140}
+          shadow-bias={-0.0004}
+          shadow-normalBias={0.03}
+          shadow-radius={4}
+        />
 
-      {/* Nền của trung tâm và hành lang. */}
-      <RoundedBox args={[spanX, 0.5, spanZ]} radius={0.2} position={[centerX, -0.25, 0]} receiveShadow>
-        <meshStandardMaterial color="#c3dcd3" />
-      </RoundedBox>
-      <mesh position={[centerX, 0.01, 0]} receiveShadow>
-        <boxGeometry args={[length + LOBBY_LENGTH, 0.02, CORRIDOR_WIDTH]} />
-        <meshStandardMaterial color="#f7f1e6" />
-      </mesh>
-      <mesh position={[lobbyX, FLOOR_TOP / 2, 0]} receiveShadow>
-        <boxGeometry args={[LOBBY_LENGTH - 0.8, FLOOR_TOP, ROOM_DEPTH + CORRIDOR_WIDTH]} />
-        <meshStandardMaterial color="#fdf8f2" />
-      </mesh>
-      <Lobby x={lobbyX} />
+        <Ground campus={campus} theme={theme} shadows={shadows} />
+        <MainBuilding place={campus.main} logoUrl={logo.src} logoAspect={logo.width / logo.height} theme={theme} shadows={shadows} />
+        {rooms.map((item) => {
+          const placement = placementOf.get(item.room.id);
+          return (
+            placement && (
+              <ClassroomBuilding
+                key={item.room.id}
+                placement={placement}
+                state={item.state}
+                selected={item.room.id === selectedId}
+                theme={theme}
+                shadows={shadows}
+                onSelect={() => onSelect(item.room.id)}
+              />
+            )
+          );
+        })}
 
-      {rooms.map((item) => (
-        <Room key={item.room.id} item={item} selected={item.room.id === selectedId} onSelect={onSelect} />
-      ))}
+        <Arena x={arena.x} z={arena.z} theme={theme} shadows={shadows} />
+        <Crates x={arena.x + 3.6} z={arena.z + 1.4} theme={theme} shadows={shadows} />
+        <Robot x={arena.x - 3.7} z={arena.z + 1.2} turn={0.9} theme={theme} shadows={shadows} />
+        <Robot x={arena.x + 0.4} z={arena.z + 3.2} turn={0.3} theme={theme} shadows={shadows} />
+        <Robot x={campus.main.x + 3.1} z={campus.main.z + MAIN_DEPTH / 2 + 2.6} turn={0.6} theme={theme} shadows={shadows} />
+        <Figures spots={figures} theme={theme} shadows={shadows} />
+        <Trees spots={trees} theme={theme} shadows={shadows} />
 
-      <OrbitControls
-        makeDefault
-        enableDamping
-        dampingFactor={0.12}
-        target={target}
-        minDistance={7}
-        maxDistance={distance * 2.2}
-        minPolarAngle={0.12}
-        maxPolarAngle={1.2}
-      />
-      <Focus goal={goal} animate={!reducedMotion} />
-      <LabelProjector rooms={rooms} labels={labels} reference={distance} />
+        <OrbitControls
+          makeDefault
+          enableDamping
+          dampingFactor={0.12}
+          screenSpacePanning={false}
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
+          minPolarAngle={0.45}
+          maxPolarAngle={1.12}
+        />
+        <CameraRig campus={campus} insets={insets} apiRef={apiRef} focus={focus} animate={!reducedMotion} />
+        <LabelProjector anchors={anchors} labels={labels} />
       </Canvas>
       {/* Lớp nhãn HTML phủ trên cảnh: không chặn chuột của cảnh, chỉ các nút nhãn nhận bấm. */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 isolate overflow-hidden">
         {rooms.map((item) => (
           <RoomLabel key={item.room.id} item={item} selected={item.room.id === selectedId} onSelect={onSelect} register={register} />
         ))}

@@ -1,72 +1,64 @@
 import type { Metadata } from "next";
-import { CenterView } from "@/components/center-3d/center-view";
-import { ClassList } from "@/components/class-list";
+import { Stage } from "@/components/center-3d/stage";
 import { DashboardCharts } from "@/components/dashboard-charts";
-import { DashboardHero } from "@/components/dashboard-hero";
-import { LinkButton } from "@/components/link-button";
-import { OverdueSessions, TodaySessions } from "@/components/session-lists";
-import { todayIso } from "@/lib/format";
+import { formatDate, formatTime } from "@/lib/format";
 import { seesAllClasses } from "@/server/guard";
 import { listOverdueSessions } from "@/server/services/attendance";
 import { listClasses } from "@/server/services/classes";
 import { centerToday, dashboardCharts } from "@/server/services/dashboard";
-import { listSessions } from "@/server/services/sessions";
-import { requirePageUser } from "@/server/session";
+import { requirePageUser, roleLabelOf } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
 
-const HREF = "/teacher/dashboard";
+/** Số buổi quá hạn gửi xuống trình duyệt để liệt kê. */
+const OVERDUE_SHOWN = 8;
 
-export default async function TeacherDashboardPage({ searchParams }: PageProps<"/teacher/dashboard">) {
+// Tổng quan kiểu dashboard 3D isometric của khu vực giảng dạy. Mọi số liệu theo phạm vi lớp của người dùng (do service áp).
+export default async function TeacherDashboardPage() {
   const user = await requirePageUser("teacher");
-  const today = todayIso();
   // Vai trò được xem mọi lớp (vd. Giáo viên trực) thấy số liệu toàn trung tâm.
   const all = seesAllClasses(user.actor);
   const attendanceHref = (id: string) => `/teacher/sessions/${id}/attendance`;
-  // ?view=3d: giao diện 3D của trung tâm; buổi học theo phạm vi lớp của người dùng, bấm để mở trang điểm danh.
-  if ((await searchParams).view === "3d") {
+  const [center, overdue, classes, charts, role] = await Promise.all([
     // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có điểm danh nên không bấm vào được.
-    const center = await centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id)));
-    return (
-      <div className="grid gap-6">
-        <DashboardHero
-          name={user.name}
-          description={all ? "Trung tâm hôm nay dưới dạng mô hình 3D." : "Các lớp của bạn hôm nay dưới dạng mô hình 3D."}
-          action={
-            <LinkButton href={HREF} variant="outline" className="h-10">
-              Giao diện thường
-            </LinkButton>
-          }
-        />
-        <CenterView data={center} backHref={HREF} />
-      </div>
-    );
-  }
-  const [todaySessions, overdue, classes, charts] = await Promise.all([
-    listSessions(user.actor, { from: today, to: today, personal: true }),
+    centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id))),
     listOverdueSessions(user.actor),
     listClasses(user.actor),
     dashboardCharts(user.actor),
+    roleLabelOf(user),
   ]);
-
+  const open = classes.filter((c) => c.status === "open");
   return (
-    <div className="grid gap-6">
-      <DashboardHero
-        name={user.name}
-        description={all ? "Tổng quan hoạt động của trung tâm hôm nay." : "Tổng quan các lớp của bạn hôm nay."}
-        action={
-          <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
-            Xem 3D
-          </LinkButton>
-        }
-      />
-      <TodaySessions sessions={todaySessions} hrefOf={(s) => attendanceHref(s.id)} today={today} />
-      <OverdueSessions sessions={overdue} hrefOf={attendanceHref} />
+    <Stage
+      data={{
+        center,
+        kpis: [
+          { label: "Buổi học hôm nay", value: center.sessions.filter((s) => !s.cancelled).length, href: "/teacher/timetable" },
+          { label: all ? "Lớp đang mở" : "Lớp đang dạy", value: open.length, href: "/teacher/classes" },
+          // Buổi quá hạn không có trang danh sách riêng ở khu vực giảng dạy: xem ở tab "Quá hạn" ngay trên trang.
+          { label: "Buổi quá hạn chưa điểm danh", value: overdue.length, href: null, alert: true },
+        ],
+        overdue: overdue.slice(0, OVERDUE_SHOWN).map((s) => ({
+          id: s.id,
+          title: s.className,
+          detail: `${formatDate(s.date)} · ${formatTime(s.startTime)}–${formatTime(s.endTime)}`,
+          href: attendanceHref(s.id),
+          locked: s.locked,
+        })),
+        overdueTotal: overdue.length,
+        overdueHref: null,
+        classes: open.map((c) => ({
+          id: c.id,
+          title: c.name,
+          detail: `${c.studentCount}/${c.maxSize} học viên${c.roomName ? ` · ${c.roomName}` : ""}`,
+          href: `/teacher/classes/${c.id}`,
+        })),
+        classesLabel: "Lớp",
+        classesEmpty: "Bạn chưa được phân công lớp nào.",
+        user: { name: user.name, role },
+      }}
+    >
       <DashboardCharts data={charts} scopeLabel={all ? "toàn trung tâm" : "các lớp của tôi"} />
-      <section className="grid gap-2">
-        <h2 className="font-medium">{all ? "Lớp đang mở" : "Lớp đang dạy"}</h2>
-        <ClassList classes={classes.filter((c) => c.status === "open")} basePath="/teacher/classes" />
-      </section>
-    </div>
+    </Stage>
   );
 }

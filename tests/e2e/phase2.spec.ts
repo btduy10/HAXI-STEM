@@ -30,8 +30,12 @@ test.beforeAll(async () => {
 test("GV điểm danh trên điện thoại 360px: mặc định có mặt, sửa một em, lưu", async ({ page }) => {
   await login(page, "gv.lan", NEW_PASSWORD);
   await expect(page).toHaveURL(/\/teacher\/dashboard$/);
-  await expect(page.getByRole("heading", { name: /Buổi học hôm nay/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Buổi quá hạn chưa điểm danh/ })).toBeVisible();
+  // Tổng quan kiểu dashboard: KPI, phòng học hôm nay, danh sách có tab (buổi hôm nay, quá hạn, lớp). Điện thoại không dựng cảnh 3D.
+  await expect(page.getByRole("region", { name: "Phòng học hôm nay" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Hôm nay/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Quá hạn/ })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Số liệu chính" }).filter({ visible: true })).toContainText("Buổi quá hạn chưa điểm danh");
+  await expect(page.locator("canvas")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: "test-results/shots/teacher-dashboard-360.png", fullPage: true });
 

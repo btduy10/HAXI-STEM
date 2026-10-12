@@ -2,7 +2,7 @@ import "server-only";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
-import { type Menu, NO_PERMISSIONS, type PermissionAction, type UserRole } from "@/lib/permissions";
+import { type Menu, NO_PERMISSIONS, type PermissionAction, type UserRole, roleLabel } from "@/lib/permissions";
 import { auth } from "./auth";
 import { AppError } from "./errors";
 import { type Actor, can, unauthenticated } from "./guard";
@@ -43,6 +43,11 @@ async function actorOf(user: SessionUser): Promise<Actor> {
   if (user.role === "admin") return base;
   const config = await loadPermissions();
   return { ...base, perms: Object.hasOwn(config, user.role) ? config[user.role]! : NO_PERMISSIONS };
+}
+
+/** Tên hiển thị của vai trò người dùng theo Cấu hình (vd. "Quản trị", "Giáo viên"). */
+export async function roleLabelOf(user: SessionUser): Promise<string> {
+  return user.role === "admin" ? roleLabel({}, "admin") : roleLabel(await loadPermissions(), user.role);
 }
 
 /** Bước bắt buộc còn thiếu trước khi được dùng hệ thống. */

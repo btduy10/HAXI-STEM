@@ -92,12 +92,23 @@ const NAV: { admin: NavEntry[]; teacher: NavItem[] } = {
   ],
 };
 
-// Dải icon (tablet 768–1279px): ẩn nhãn, canh icon vào giữa; nhãn vẫn còn cho trình đọc màn hình và làm chú thích.
-const RAIL_ITEM = "md:max-xl:justify-center md:max-xl:px-0";
-const RAIL_LABEL = "md:max-xl:sr-only";
+// Dải icon: ẩn nhãn, canh icon vào giữa; nhãn vẫn còn cho trình đọc màn hình và làm chú thích.
+// "auto": chỉ ở tablet (768–1279px). "always": ở mọi bề rộng từ 768px, dùng cho trang Tổng quan kiểu dashboard 3D
+// (nhường chỗ cho cảnh 3D).
+type Rail = "auto" | "always";
+const RAIL = {
+  item: { auto: "md:max-xl:justify-center md:max-xl:px-0", always: "md:justify-center md:px-0" },
+  label: { auto: "md:max-xl:sr-only", always: "md:sr-only" },
+  hidden: { auto: "md:max-xl:hidden", always: "md:hidden" },
+  groupOpen: { auto: "md:max-xl:bg-sidebar-accent", always: "md:bg-sidebar-accent" },
+  children: { auto: "md:max-xl:ml-0 md:max-xl:border-l-0 md:max-xl:pl-0", always: "md:ml-0 md:border-l-0 md:pl-0" },
+  brand: { auto: "md:max-xl:justify-center md:max-xl:px-1", always: "md:justify-center md:px-1" },
+  brandLogo: { auto: "md:max-xl:w-12", always: "md:w-12" },
+} as const;
+const isStage = (pathname: string) => pathname.endsWith("/dashboard");
 
 // Chỉ tải trước trang khi người dùng rê chuột/chạm vào mục menu, thay vì tải trước cả menu ở mỗi lần mở trang.
-function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: boolean; onNavigate?: () => void; rail?: boolean }) {
+function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: boolean; onNavigate?: () => void; rail?: Rail }) {
   const [intent, setIntent] = useState(false);
   const { href, label, icon: Icon } = item;
   return (
@@ -116,11 +127,11 @@ function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: bo
         active
           ? "bg-sidebar-primary font-semibold text-sidebar-primary-foreground group-data-[pill=on]/nav:bg-transparent"
           : "hover:bg-sidebar-accent",
-        rail && RAIL_ITEM,
+        rail && RAIL.item[rail],
       )}
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      <span className={cn(rail && RAIL_LABEL)}>{label}</span>
+      <span className={cn(rail && RAIL.label[rail])}>{label}</span>
     </Link>
   );
 }
@@ -135,7 +146,7 @@ function NavGroup({
   group: NavGroupItem;
   pathname: string;
   onNavigate?: () => void;
-  rail?: boolean;
+  rail?: Rail;
 }) {
   const containsActive = group.children.some((item) => isActive(pathname, item.href));
   const [open, setOpen] = useState(containsActive);
@@ -155,16 +166,16 @@ function NavGroup({
         className={cn(
           "relative flex min-h-11 items-center gap-3 rounded-full px-4 text-left text-sm transition-colors hover:bg-sidebar-accent",
           containsActive ? "font-semibold" : "font-medium",
-          rail && RAIL_ITEM,
-          rail && open && "md:max-xl:bg-sidebar-accent",
+          rail && RAIL.item[rail],
+          rail && open && RAIL.groupOpen[rail],
         )}
       >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className={cn("flex-1", rail && RAIL_LABEL)}>{group.label}</span>
-        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-180", rail && "md:max-xl:hidden")} aria-hidden />
+        <span className={cn("flex-1", rail && RAIL.label[rail])}>{group.label}</span>
+        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-180", rail && RAIL.hidden[rail])} aria-hidden />
       </button>
       {open && (
-        <div className={cn("ml-4 grid gap-1 border-l border-sidebar-border pl-2", rail && "md:max-xl:ml-0 md:max-xl:border-l-0 md:max-xl:pl-0")}>
+        <div className={cn("ml-4 grid gap-1 border-l border-sidebar-border pl-2", rail && RAIL.children[rail])}>
           {group.children.map((item) => (
             <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={onNavigate} rail={rail} />
           ))}
@@ -174,7 +185,7 @@ function NavGroup({
   );
 }
 
-function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?: () => void; rail?: boolean }) {
+function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?: () => void; rail?: Rail }) {
   const pathname = usePathname();
   const navRef = useRef<HTMLElement>(null);
   const pillRef = useRef<HTMLSpanElement>(null);
@@ -231,30 +242,30 @@ function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?:
   );
 }
 
-function AccountLinks({ userName, rail }: { userName: string; rail?: boolean }) {
+function AccountLinks({ userName, rail }: { userName: string; rail?: Rail }) {
   async function signOut() {
     await authClient.signOut();
     hardNavigate("/login");
   }
   return (
     <div className="grid gap-1 border-t border-sidebar-border p-2">
-      <p className={cn("truncate px-4 py-1 text-xs text-sidebar-foreground/70", rail && "md:max-xl:hidden")}>{userName}</p>
+      <p className={cn("truncate px-4 py-1 text-xs text-sidebar-foreground/70", rail && RAIL.hidden[rail])}>{userName}</p>
       <Link
         href="/change-password"
         title={rail ? "Đổi mật khẩu" : undefined}
-        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL_ITEM)}
+        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL.item[rail])}
       >
         <KeyRoundIcon className="size-4 shrink-0" aria-hidden />
-        <span className={cn(rail && RAIL_LABEL)}>Đổi mật khẩu</span>
+        <span className={cn(rail && RAIL.label[rail])}>Đổi mật khẩu</span>
       </Link>
       <button
         type="button"
         onClick={signOut}
         title={rail ? "Đăng xuất" : undefined}
-        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-left text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL_ITEM)}
+        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-left text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL.item[rail])}
       >
         <LogOutIcon className="size-4 shrink-0" aria-hidden />
-        <span className={cn(rail && RAIL_LABEL)}>Đăng xuất</span>
+        <span className={cn(rail && RAIL.label[rail])}>Đăng xuất</span>
       </button>
     </div>
   );
@@ -287,13 +298,16 @@ export function AppShell({
     const children = visible(entry.children);
     return children.length > 0 ? [{ ...entry, children }] : [];
   });
-  // Logo có chữ màu navy nên phần đầu thanh điều hướng giữ nền trắng. `rail` = dải icon ở tablet: chỉ còn logo.
-  const sidebarBrand = (rail: boolean) => (
-    <div className={cn("flex items-center gap-3 bg-white px-4 py-3 text-foreground", rail && "md:max-xl:justify-center md:max-xl:px-1")}>
-      <span className={cn("shrink-0", rail && "md:max-xl:w-12")}>
+  // Trang Tổng quan kiểu dashboard 3D: thanh điều hướng luôn là dải icon và vùng nội dung tràn hết khung (không có cửa sổ kính).
+  const stage = isStage(pathname);
+  const rail: Rail = stage ? "always" : "auto";
+  // Logo có chữ màu navy nên phần đầu thanh điều hướng giữ nền trắng. `rail` = dải icon: chỉ còn logo.
+  const sidebarBrand = (rail?: Rail) => (
+    <div className={cn("flex items-center gap-3 bg-white px-4 py-3 text-foreground", rail && RAIL.brand[rail])}>
+      <span className={cn("shrink-0", rail && RAIL.brandLogo[rail])}>
         <BrandLogo height={56} />
       </span>
-      <span className={cn("text-sm leading-tight font-semibold text-muted-foreground", rail && "md:max-xl:hidden")}>
+      <span className={cn("text-sm leading-tight font-semibold text-muted-foreground", rail && RAIL.hidden[rail])}>
         Quản lý
         <br />
         trung tâm Robotics
@@ -303,7 +317,7 @@ export function AppShell({
 
   return (
     // --sidebar-w: bề rộng thanh điều hướng ở từng mốc; thanh Lưu cố định của trang Điểm danh/Chấm sao dựa vào biến này.
-    <div className="flex min-h-dvh flex-col md:flex-row md:[--sidebar-w:4.5rem] xl:[--sidebar-w:15rem]">
+    <div className={cn("flex min-h-dvh flex-col md:flex-row md:[--sidebar-w:4.5rem]", !stage && "xl:[--sidebar-w:15rem]")}>
       <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-white px-3 md:hidden print:hidden">
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger render={<Button variant="ghost" size="icon" aria-label="Mở menu" />}>
@@ -311,7 +325,7 @@ export function AppShell({
           </SheetTrigger>
           <SheetContent side="left" className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
             <SheetHeader className="p-0">
-              <SheetTitle>{sidebarBrand(false)}</SheetTitle>
+              <SheetTitle>{sidebarBrand()}</SheetTitle>
             </SheetHeader>
             <div className="flex-1 overflow-y-auto">
               <NavLinks items={items} onNavigate={() => setOpen(false)} />
@@ -323,21 +337,28 @@ export function AppShell({
       </header>
 
       <aside className="glass-sidebar sticky top-0 hidden h-dvh w-(--sidebar-w) shrink-0 flex-col text-sidebar-foreground md:flex print:hidden">
-        {sidebarBrand(true)}
+        {/* Ở dashboard 3D logo nằm trên thanh trên của trang nên dải icon không lặp lại logo. */}
+        {stage ? <div className="h-2" /> : sidebarBrand(rail)}
         <div className="sidebar-scroll flex-1 overflow-y-auto">
-          <NavLinks items={items} rail />
+          <NavLinks items={items} rail={rail} />
         </div>
-        <AccountLinks userName={userName} rail />
+        <AccountLinks userName={userName} rail={rail} />
       </aside>
 
       {/*
         Cửa sổ kính của vùng nội dung là lớp nền NẰM CẠNH <main>, không bọc nó: phần tử cha có backdrop-filter
         sẽ làm lệch các thanh position: fixed bên trong trang (thanh Lưu điểm danh, chấm sao).
       */}
-      <div className="relative min-w-0 flex-1 md:p-3 xl:p-4 print:p-0">
-        <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:inset-3 md:rounded-3xl xl:inset-4 print:hidden" />
-        <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
-      </div>
+      {stage ? (
+        <div className="relative min-w-0 flex-1">
+          <main className={cn("relative min-w-0", navigated && "page-enter")}>{children}</main>
+        </div>
+      ) : (
+        <div className="relative min-w-0 flex-1 md:p-3 xl:p-4 print:p-0">
+          <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:inset-3 md:rounded-3xl xl:inset-4 print:hidden" />
+          <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
+        </div>
+      )}
     </div>
   );
 }

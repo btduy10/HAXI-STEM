@@ -19,7 +19,19 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
   --color-brand-gold: var(--brand-gold);
+  --color-brand-gold-soft: var(--brand-gold-soft);
   --color-brand-teal: var(--brand-teal);
+  --color-primary-strong: var(--primary-strong);
+  --color-primary-soft: var(--primary-soft);
+  --color-ink-soft: var(--ink-soft);
+  --color-danger: var(--danger);
+  --color-state-live: var(--state-live);
+  --color-state-upcoming: var(--state-upcoming);
+  --color-state-done: var(--state-done);
+  --color-state-idle: var(--state-idle);
+  --color-scene-bg: var(--scene-bg);
+  --shadow-panel: var(--panel-shadow);
+  --radius-panel: var(--panel-radius);
   --color-shift-1: var(--shift-1);
   --color-shift-2: var(--shift-2);
   --color-shift-3: var(--shift-3);
@@ -96,7 +108,44 @@
   --sidebar-ring: #4dd0c0;
   /* Teal nhấn cho nút/tab đang chọn (chữ navy đặt trên); vàng đồng của logo cho huy hiệu, sao. */
   --brand-teal: #4dd0c0;
-  --brand-gold: oklch(0.67 0.12 75);
+  /* Vàng đồng: mã lấy đúng từ logo (public/logo.png), dạng hex để dùng được cho cả vật liệu 3D. */
+  --brand-gold: #bc8a3f;
+  --brand-gold-soft: #f6e9cf;
+  /*
+   * Giao diện dashboard 3D isometric (trang Tổng quan): token dùng chung cho thẻ nổi và vật liệu của cảnh 3D.
+   * Vật liệu 3D đọc các biến này lúc chạy (src/components/center-3d/theme.ts) nên mọi giá trị ở nhóm này phải là hex (hoặc trỏ tới một biến hex khác).
+   */
+  --primary-strong: #1f5a41;
+  --primary-soft: #e6f2ec;
+  --ink-soft: #5b6b7f;
+  --danger: #d64545;
+  /* Trạng thái phòng/buổi học: Đang học, Sắp học, Hoàn tất, Trống. */
+  --state-live: var(--primary);
+  --state-upcoming: var(--brand-gold);
+  --state-done: #a9d6c4;
+  --state-idle: #c9d1cf;
+  /* Thẻ trắng nổi trên cảnh: bo 18px, viền rất nhạt, bóng mờ. */
+  --panel-radius: 1.125rem;
+  --panel-border: rgb(14 40 65 / 0.08);
+  --panel-shadow: 0 1px 2px rgb(14 40 65 / 0.05), 0 14px 32px -18px rgb(14 40 65 / 0.3);
+  /* Cảnh 3D: nền kem–xanh ngọc rất nhạt, sân và đường xám kem, vạch vàng đồng nhạt, nhà trắng kem mái xanh thương hiệu. */
+  --scene-bg: #f2f5ee;
+  --scene-ground: #e4e1d4;
+  --scene-plaza: #f8f4ea;
+  --scene-road: #cfcdc2;
+  --scene-road-line: #e8d09a;
+  --scene-wall: #fbf7ee;
+  --scene-trim: #ece6d6;
+  --scene-roof: var(--primary);
+  --scene-door: var(--primary-strong);
+  --scene-glass: #cfe7e0;
+  --scene-tree: #1d6646;
+  --scene-trunk: #8a6b4a;
+  --scene-wood: #d8b98c;
+  --scene-skin: #f1d3b5;
+  --scene-ink: var(--foreground);
+  --scene-white: var(--card);
+  --scene-teal: var(--brand-teal);
   /* Bề rộng thanh điều hướng theo cỡ màn hình (app-shell đặt lại ở từng mốc); thanh Lưu cố định dựa vào đây. */
   --sidebar-w: 0px;
   /* Thời khóa biểu: nền theo ca, cùng tông kem của nền trang, chỉ đậm dần (Sáng → Chiều → Tối). */
@@ -223,6 +272,23 @@
     box-shadow:
       0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent),
       0 8px 18px -16px color-mix(in oklab, var(--foreground) 22%, transparent);
+  }
+}
+/*
+ * Giao diện mới (dashboard 3D isometric): thẻ trắng đặc, bo lớn, bóng mờ – thay cho mặt kính ở các trang đã chuyển.
+ */
+@utility panel {
+  background-color: var(--card);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+}
+/* Vùng trang đã chuyển sang giao diện mới: thẻ số liệu, biểu đồ bên trong cũng dùng mặt trắng đặc. */
+@layer components {
+  .stage-surface .glass-card {
+    background-color: var(--card);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
   }
 }
 @utility glass-sidebar {

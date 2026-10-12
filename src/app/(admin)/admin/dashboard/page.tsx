@@ -1,76 +1,57 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { CenterView } from "@/components/center-3d/center-view";
-import { CountUp } from "@/components/count-up";
+import { Stage } from "@/components/center-3d/stage";
 import { DashboardCharts } from "@/components/dashboard-charts";
-import { DashboardHero } from "@/components/dashboard-hero";
-import { LinkButton } from "@/components/link-button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatDate, formatTime } from "@/lib/format";
 import { listOverdueSessions } from "@/server/services/attendance";
 import { adminOverview, centerToday, dashboardCharts } from "@/server/services/dashboard";
-import { requirePageUser } from "@/server/session";
+import { requirePageUser, roleLabelOf } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
 
-const HREF = "/admin/dashboard";
+/** Số buổi quá hạn gửi xuống trình duyệt để liệt kê; phần còn lại xem ở trang Điểm danh. */
+const OVERDUE_SHOWN = 8;
 
-export default async function AdminDashboardPage({ searchParams }: PageProps<"/admin/dashboard">) {
+// Tổng quan kiểu dashboard 3D isometric. Chỉ đọc dữ liệu qua các service sẵn có (đã kiểm tra quyền); không có thao tác ghi.
+export default async function AdminDashboardPage() {
   const user = await requirePageUser("admin");
-  // ?view=3d: giao diện 3D của trung tâm thay cho phần số liệu; chỉ khi đó mới đọc dữ liệu phòng và buổi hôm nay.
-  if ((await searchParams).view === "3d") {
-    const center = await centerToday(user.actor, (s) => `/admin/sessions/${s.id}`);
-    return (
-      <div className="grid gap-6">
-        <DashboardHero
-          name={user.name}
-          description="Trung tâm hôm nay dưới dạng mô hình 3D."
-          action={
-            <LinkButton href={HREF} variant="outline" className="h-10">
-              Giao diện thường
-            </LinkButton>
-          }
-        />
-        <CenterView data={center} backHref={HREF} />
-      </div>
-    );
-  }
-  const [overview, overdue, charts] = await Promise.all([
+  const [overview, overdue, charts, center, role] = await Promise.all([
     adminOverview(user.actor),
     listOverdueSessions(user.actor),
     dashboardCharts(user.actor),
+    centerToday(user.actor, (s) => `/admin/sessions/${s.id}`),
+    roleLabelOf(user),
   ]);
-  const stats = [
-    { label: "Học viên đang học", value: overview.activeStudents, href: "/admin/students" },
-    { label: "Giáo viên đang dạy", value: overview.activeTeachers, href: "/admin/teachers" },
-    { label: "Lớp đang mở", value: overview.openClasses, href: "/admin/classes" },
-    { label: "Buổi quá hạn chưa điểm danh", value: overdue.length, href: "/admin/attendance" },
-  ];
   return (
-    <div className="grid gap-6">
-      <DashboardHero
-        name={user.name}
-        description="Tổng quan hoạt động của trung tâm hôm nay."
-        action={
-          <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
-            Xem 3D
-          </LinkButton>
-        }
-      />
-      <div className="stagger grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => (
-          <Link key={s.href} href={s.href} className="rounded-3xl focus-visible:outline-2">
-            <Card className="card-lift h-full justify-between">
-              <CardHeader>
-                <CardTitle className="text-sm font-normal text-muted-foreground">{s.label}</CardTitle>
-              </CardHeader>
-              <CardContent className="text-4xl leading-none font-bold tabular-nums">
-                <CountUp value={s.value} />
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
-      </div>
+    <Stage
+      data={{
+        center,
+        kpis: [
+          { label: "Học viên đang học", value: overview.activeStudents, href: "/admin/students" },
+          { label: "Giáo viên đang dạy", value: overview.activeTeachers, href: "/admin/teachers" },
+          { label: "Lớp đang mở", value: overview.openClasses, href: "/admin/classes" },
+          { label: "Buổi quá hạn chưa điểm danh", value: overdue.length, href: "/admin/attendance", alert: true },
+        ],
+        overdue: overdue.slice(0, OVERDUE_SHOWN).map((s) => ({
+          id: s.id,
+          title: s.className,
+          detail: `${formatDate(s.date)} · ${formatTime(s.startTime)}–${formatTime(s.endTime)}`,
+          href: `/admin/attendance/${s.id}`,
+          locked: s.locked,
+        })),
+        overdueTotal: overdue.length,
+        overdueHref: "/admin/attendance",
+        classes: charts.classRates.map((c) => ({
+          id: c.classId,
+          title: c.name,
+          detail: `Chuyên cần ${c.rate}% · ${c.total} lượt điểm danh`,
+          href: `/admin/classes/${c.classId}`,
+        })),
+        classesLabel: "Lớp",
+        classesEmpty: "Chưa có lớp đang mở nào được điểm danh.",
+        user: { name: user.name, role },
+      }}
+    >
       <DashboardCharts data={charts} scopeLabel="toàn trung tâm" />
-    </div>
+    </Stage>
   );
 }

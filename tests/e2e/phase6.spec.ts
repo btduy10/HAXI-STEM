@@ -64,7 +64,7 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
   // Giảm chuyển động: mọi animation của trang Tổng quan chạy xong tức thì, số KPI hiện ngay giá trị thật.
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/admin/dashboard");
-  await expect(page.getByRole("heading", { name: /^Xin chào/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tổng quan trung tâm" })).toHaveCount(1);
   const longest = await page.evaluate(() =>
     Math.max(0, ...document.getAnimations().map((animation) => Number(animation.effect?.getComputedTiming().endTime ?? 0))),
   );
@@ -78,7 +78,7 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
   expect(pageErrors).toEqual([]);
 });
 
-test("Tổng quan: nút Xem 3D chỉ có từ laptop; cảnh 3D trung tâm hiện phòng và buổi hôm nay theo phạm vi của người dùng, bấm phòng mở được buổi học", async ({ page, browser }) => {
+test("Tổng quan kiểu dashboard 3D: điện thoại không dựng cảnh; laptop có cảnh isometric với thanh trên, KPI, các thẻ nổi; tìm kiếm, nút camera, chọn phòng mở đúng buổi; giáo viên chỉ thấy buổi trong phạm vi", async ({ page, browser }) => {
   test.setTimeout(240_000);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -99,68 +99,110 @@ test("Tổng quan: nút Xem 3D chỉ có từ laptop; cảnh 3D trung tâm hiệ
     values (${cls!.id}, ${today}, '00:00', '23:59', ${room!.id}, ${teacher!.id}) returning id`;
 
   try {
+    const threeScripts: string[] = [];
+    page.on("request", (request) => request.resourceType() === "script" && /three/i.test(request.url()) && threeScripts.push(request.url()));
     await login(page, "admin", NEW_PASSWORD);
     await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
     await page.getByRole("button", { name: "Xác nhận" }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/);
-
-    // Điện thoại 360px: không có nút; mở thẳng địa chỉ thì chỉ có lời nhắn, không dựng cảnh và không tải thư viện 3D.
-    await expect(page.getByRole("link", { name: "Xem 3D" })).toHaveCount(0);
-    const threeScripts: string[] = [];
-    page.on("request", (request) => request.resourceType() === "script" && /three/i.test(request.url()) && threeScripts.push(request.url()));
-    await page.goto("/admin/dashboard?view=3d");
-    await expect(page.getByText("Giao diện 3D dùng trên màn hình từ laptop trở lên.")).toBeVisible();
-    await expect(page.locator("canvas")).toHaveCount(0);
-    await expect(page.locator("[data-room]").filter({ visible: true })).toHaveCount(0);
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+    // Điện thoại 360px: một cột, không dựng cảnh, không tải thư viện 3D; số liệu và danh sách vẫn đủ.
+    await expect(page.getByRole("link", { name: /Học viên đang học/ })).toBeVisible();
+    const rooms = page.getByRole("region", { name: "Phòng học hôm nay" });
+    await expect(rooms.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "live");
+    await expect(page.getByRole("tab", { name: /^Hôm nay/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel").locator('[data-session="Lớp thử 3D"]')).toContainText("Đang học");
+    await expect(page.locator("[data-day-percent]")).toHaveText(/^\d+%$/);
+    await expect(page.getByRole("heading", { name: "Điểm danh 30 ngày qua" })).toBeVisible();
+    await expect(page.locator("canvas")).toHaveCount(0);
+    await expect(page.locator("[data-center-scene]")).toBeHidden();
     expect(await overflow()).toBeLessThanOrEqual(0);
     await page.waitForLoadState("networkidle");
     expect(threeScripts, "điện thoại không tải thư viện 3D").toEqual([]);
-    await page.getByRole("link", { name: "Giao diện thường" }).click();
-    await expect(page).toHaveURL(/\/admin\/dashboard$/);
-    await expect(page.getByRole("link", { name: /Học viên đang học/ })).toBeVisible();
+    // Buổi hôm nay mở đúng trang buổi học.
+    await page.getByRole("tabpanel").getByRole("link", { name: /Lớp thử 3D/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/sessions/${held!.id}$`));
 
-    // Laptop 1366×768: nút Xem 3D ở lời chào, bấm thì đổi sang cảnh 3D.
+    // Laptop 1366×768: cảnh 3D isometric làm nền, các thẻ nổi lên trên.
     await page.setViewportSize({ width: 1366, height: 768 });
     await page.goto("/admin/dashboard");
-    await page.getByRole("link", { name: "Xem 3D" }).click();
-    await expect(page).toHaveURL(/\/admin\/dashboard\?view=3d$/);
     const scene = page.locator("[data-center-scene]");
     await expect(scene.locator("canvas")).toBeVisible({ timeout: 60_000 });
-    // Thư viện 3D chỉ được tải ở bước này.
-    expect(threeScripts.length, "màn hình rộng tải thư viện 3D khi mở cảnh").toBeGreaterThan(0);
+    await expect(scene.getByRole("status")).toHaveCount(0, { timeout: 60_000 });
+    expect(threeScripts.length, "màn hình rộng tải thư viện 3D").toBeGreaterThan(0);
+    // Thanh điều hướng thu thành dải icon để nhường chỗ cho cảnh.
+    expect((await page.locator("aside").first().boundingBox())!.width).toBeLessThan(100);
 
-    // Bảng bên cạnh: mọi phòng, phòng thử đang học; bấm phòng hiện buổi hôm nay kèm đường mở buổi học.
-    const roomButton = page.locator('[data-room="Phòng 3D E2E"]');
-    await expect(roomButton).toHaveAttribute("data-state", "live");
-    await expect(roomButton).toContainText("Đang học · 00:00–23:59 · Lớp thử 3D");
-    await expect(roomButton).toContainText("8 chỗ");
-    await expect(page.locator('[data-room="Phòng Lab 1"]')).toBeVisible();
-    await roomButton.click();
-    await expect(roomButton).toHaveAttribute("aria-pressed", "true");
-    const detail = page.locator("aside section").filter({ has: page.getByRole("heading", { name: /Phòng 3D E2E/ }) });
-    await expect(detail).toContainText("GV: ");
-    await expect(detail).toContainText("Sĩ số 1/8");
-    await expect(detail.getByText("Đang học")).toBeVisible();
-    // Không có tên học viên nào trong trang.
+    // Thanh trên: logo, tìm kiếm, Live + đồng hồ, chuông, tài khoản kèm vai trò.
+    const bar = page.locator("header").filter({ hasText: "Live" });
+    await expect(bar.getByRole("img", { name: "HAXI STEM" })).toBeVisible();
+    await expect(bar.locator("[data-clock]")).toHaveText(/^\d{2}:\d{2}$/);
+    await expect(bar.getByRole("button", { name: /^Thông báo: / })).toBeVisible();
+    const account = bar.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ });
+    await account.click();
+    await expect(bar.getByRole("link", { name: "Đổi mật khẩu" })).toBeVisible();
+    await expect(bar.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(bar.getByRole("button", { name: "Đăng xuất" })).toHaveCount(0);
+
+    // KPI giữ các số và đường dẫn cũ.
+    for (const name of ["Học viên đang học", "Giáo viên đang dạy", "Lớp đang mở", "Buổi quá hạn chưa điểm danh"]) {
+      await expect(scene.getByRole("link", { name: new RegExp(name) })).toBeVisible();
+    }
+
+    // Phím "/" vào ô tìm kiếm; gõ không dấu vẫn ra; Enter chọn phòng của buổi tìm thấy.
+    await page.keyboard.press("/");
+    const search = bar.getByRole("searchbox");
+    await expect(search).toBeFocused();
+    await search.fill("thu 3d");
+    await expect(bar.getByRole("list", { name: "Kết quả tìm kiếm" })).toContainText("Lớp thử 3D");
+    await page.keyboard.press("Enter");
+    await expect(rooms.getByRole("heading", { name: "Phòng 3D E2E" })).toBeVisible();
+    await expect(rooms).toContainText("Sức chứa 8 chỗ · 1 buổi hôm nay");
+    await expect(rooms).toContainText("Sĩ số 1/8");
+    await expect(rooms).toContainText("GV: ");
+    await expect(rooms.getByRole("link", { name: "Mở buổi học" })).toHaveAttribute("href", `/admin/sessions/${held!.id}`);
+    // Không có tên hay mã học viên nào trong trang.
     await expect(page.getByText("HV001")).toHaveCount(0);
-    // Nhãn của phòng trong cảnh 3D là nút thật: cùng trạng thái, cùng phòng đang chọn.
+    // Nhãn của phòng trong cảnh là nút thật: cùng trạng thái, đang được chọn.
     const label = scene.getByRole("button", { name: "Phòng 3D E2E: Đang học, Lớp thử 3D" });
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute("aria-pressed", "true");
-    await expect(label).toContainText("Sĩ số 1/8");
-    expect(await overflow()).toBeLessThanOrEqual(0);
-    await page.waitForTimeout(1500);
-    await page.screenshot({ path: "test-results/shots/center-3d-1366.png" });
 
-    await detail.getByRole("link", { name: "Mở buổi học" }).click();
+    // Cột nút điều khiển góc nhìn: mỗi nút làm cảnh đổi (nhãn của phòng dời chỗ hoặc đổi cỡ).
+    const placed = () => label.evaluate((element) => (element as HTMLElement).style.transform);
+    for (const name of ["Phóng to", "Xoay 45°", "Thu nhỏ", "Về tòa nhà chính", "Đặt lại góc nhìn"]) {
+      const before = await placed();
+      await page.getByRole("button", { name, exact: true }).click();
+      await expect.poll(placed, { message: `nút ${name} đổi góc nhìn` }).not.toBe(before);
+      await page.waitForTimeout(700);
+    }
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: "test-results/shots/stage-1366.png" });
+
+    // Quay lại danh sách phòng; tab Quá hạn và tab Lớp đổi nội dung thẻ danh sách.
+    await rooms.getByRole("button", { name: "Tất cả phòng" }).click();
+    await expect(rooms.locator('[data-room="Phòng Lab 1"]')).toBeVisible();
+    await page.getByRole("tab", { name: /^Quá hạn/ }).click();
+    await expect(page.getByRole("tab", { name: /^Quá hạn/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel").locator('[data-session="Lớp thử 3D"]')).toHaveCount(0);
+    await page.getByRole("tab", { name: /^Lớp/ }).click();
+    await expect(page.getByRole("tabpanel")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "Tiến trình các buổi học hôm nay" })).toBeVisible();
+    expect(await overflow()).toBeLessThanOrEqual(0);
+
+    // Bấm phòng ở danh sách rồi mở buổi học.
+    await rooms.locator('[data-room="Phòng 3D E2E"]').click();
+    await rooms.getByRole("link", { name: "Mở buổi học" }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/sessions/${held!.id}$`));
-    await page.goBack();
+
+    // 1024px: cảnh ở trên, các thẻ xếp bên dưới, không tràn ngang.
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto("/admin/dashboard");
     await expect(scene.locator("canvas")).toBeVisible({ timeout: 60_000 });
-    await page.getByRole("link", { name: "Giao diện thường" }).click();
-    await expect(page).toHaveURL(/\/admin\/dashboard$/);
-    await expect(page.locator("canvas")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: /Học viên đang học/ })).toBeVisible();
+    await expect(rooms.locator('[data-room="Phòng 3D E2E"]')).toBeVisible();
+    expect(await overflow()).toBeLessThanOrEqual(0);
 
     // Giáo viên khác (phạm vi lớp của mình): vẫn thấy phòng, nhưng không thấy buổi của lớp không phải của mình.
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
@@ -168,11 +210,12 @@ test("Tổng quan: nút Xem 3D chỉ có từ laptop; cảnh 3D trung tâm hiệ
     teacherPage.on("pageerror", (error) => pageErrors.push(String(error)));
     await login(teacherPage, "gv.lan", NEW_PASSWORD);
     await expect(teacherPage).toHaveURL(/\/teacher\/dashboard$/);
-    await teacherPage.getByRole("link", { name: "Xem 3D" }).click();
-    await expect(teacherPage).toHaveURL(/\/teacher\/dashboard\?view=3d$/);
     await expect(teacherPage.locator("[data-center-scene] canvas")).toBeVisible({ timeout: 60_000 });
     await expect(teacherPage.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "idle");
     await expect(teacherPage.getByText("Lớp thử 3D")).toHaveCount(0);
+    await expect(teacherPage.getByRole("button", { name: /^Tài khoản: .+, Giáo viên$/ })).toBeVisible();
+    await expect(teacherPage.locator("[data-center-scene]").getByRole("list", { name: "Số liệu chính" })).toContainText("Buổi học hôm nay");
+    await teacherPage.screenshot({ path: "test-results/shots/stage-teacher-1366.png" });
     await context.close();
 
     expect(pageErrors).toEqual([]);
