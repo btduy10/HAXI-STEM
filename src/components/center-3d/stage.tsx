@@ -89,6 +89,8 @@ const COMPACT_INSETS: SceneInsets = { top: 104, right: 60, bottom: 0, left: 0 };
 
 export type StageData = {
   center: CenterData;
+  /** Dòng báo khi một phần dữ liệu của trang không tải được (trang vẫn mở với phần còn lại); null khi đủ dữ liệu. */
+  notice: string | null;
   kpis: StageKpi[];
   /** Các buổi quá hạn chưa điểm danh (đã giới hạn số dòng gửi xuống) và tổng số. */
   overdue: OverdueItem[];
@@ -330,6 +332,11 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
           overdueTotal={data.overdueTotal}
           overdueHref={data.overdueHref}
         />
+        {data.notice && (
+          <p role="alert" className="panel relative z-30 border-danger/40 px-3.5 py-2.5 text-sm xl:absolute xl:bottom-3 xl:left-1/2 xl:max-w-md xl:-translate-x-1/2">
+            {data.notice}
+          </p>
+        )}
         <Kpis items={data.kpis} className="md:hidden" />
 
         <div

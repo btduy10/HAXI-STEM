@@ -7,7 +7,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 import { audit } from "./audit";
-import { resolveBaseUrl } from "./base-url";
+import { previewOrigins, resolveBaseUrl } from "./base-url";
 import { hashPassword, verifyPassword } from "./password";
 
 const MAX_FAILED = Number(process.env.LOGIN_MAX_FAILED_ATTEMPTS ?? 5);
@@ -35,6 +35,8 @@ async function findLoginUser(name: string | null) {
 export const auth = betterAuth({
   appName: "HAXI STEM",
   baseURL: resolveBaseUrl(),
+  // Chỉ có giá trị ở bản preview của Vercel (tên miền của chính bản preview); production không thêm nguồn nào.
+  trustedOrigins: previewOrigins(),
   secret: process.env.BETTER_AUTH_SECRET,
   database: drizzleAdapter(db, {
     provider: "pg",

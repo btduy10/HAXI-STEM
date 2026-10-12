@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import { QuickStats, kpiCards } from "@/components/center-3d/overview";
+import { QuickStats, kpiCards, stageNotice } from "@/components/center-3d/overview";
 import { Stage } from "@/components/center-3d/stage";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { formatDate, formatTime } from "@/lib/format";
 import { can, seesAllClasses } from "@/server/guard";
 import { listOverdueSessions } from "@/server/services/attendance";
 import { listClasses } from "@/server/services/classes";
-import { centerKpis, centerToday, dashboardCharts } from "@/server/services/dashboard";
+import { orFallback } from "@/server/page";
+import { centerKpis, centerToday, dashboardCharts, emptyCenter } from "@/server/services/dashboard";
 import { requirePageUser, roleLabelOf } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
@@ -20,22 +21,25 @@ export default async function TeacherDashboardPage() {
   // Vai trò được xem mọi lớp (vd. Giáo viên trực) thấy số liệu toàn trung tâm.
   const all = seesAllClasses(user.actor);
   const attendanceHref = (id: string) => `/teacher/sessions/${id}/attendance`;
-  const [center, kpis, overdue, classes, charts, role] = await Promise.all([
+  // Dữ liệu của cảnh và ba thẻ KPI mới là phần phụ: nếu lỗi thì trang vẫn mở với các số liệu còn lại và một dòng báo.
+  const [loaded, kpis, overdue, classes, charts, role] = await Promise.all([
     // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có điểm danh nên không bấm vào được.
-    centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id))),
-    centerKpis(user.actor),
+    orFallback("centerToday", centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id))), null),
+    orFallback("centerKpis", centerKpis(user.actor), null),
     listOverdueSessions(user.actor),
     listClasses(user.actor),
     dashboardCharts(user.actor),
     roleLabelOf(user),
   ]);
+  const center = loaded ?? emptyCenter();
   const open = classes.filter((c) => c.status === "open");
   return (
     <Stage
       data={{
         center,
+        notice: stageNotice(loaded === null, kpis === null),
         kpis: [
-          ...kpiCards(kpis, { students: "/teacher/timetable", attendance: null, stars: null }),
+          ...(kpis ? kpiCards(kpis, { students: "/teacher/timetable", attendance: null, stars: null }) : []),
           // Buổi quá hạn không có trang danh sách riêng ở khu vực giảng dạy: xem danh sách dưới chuông ở thanh trên.
           { label: "Buổi quá hạn chưa điểm danh", value: overdue.length, href: null, alert: true },
         ],

@@ -31,6 +31,13 @@ export function kpiCards(kpis: CenterKpis, hrefs: { students: string | null; att
   ];
 }
 
+/** Dòng báo trên trang Tổng quan khi một phần dữ liệu phụ không tải được; null khi đủ dữ liệu. */
+export function stageNotice(noCenter: boolean, noKpis: boolean): string | null {
+  if (!noCenter && !noKpis) return null;
+  const missing = [noCenter ? "phòng và buổi học hôm nay" : null, noKpis ? "số liệu hôm nay và tuần này" : null].filter(Boolean).join(", ");
+  return `Chưa tải được ${missing}. Các phần khác của trang vẫn dùng bình thường; thử tải lại trang sau ít phút.`;
+}
+
 /** Hàng số liệu chung (số học viên, giáo viên, lớp…) phía trên biểu đồ; mỗi số dẫn tới trang của nó. */
 export function QuickStats({ items }: { items: { label: string; value: number; href: string }[] }) {
   return (

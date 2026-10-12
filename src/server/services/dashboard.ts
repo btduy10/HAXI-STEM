@@ -136,6 +136,15 @@ export async function centerToday(actor: Actor, hrefOf: (session: SessionRow) =>
   };
 }
 
+/**
+ * Dữ liệu rỗng của cảnh, dùng khi `centerToday` lỗi: trang Tổng quan vẫn mở được, chỉ không có phòng và buổi học.
+ * Ngày và giờ Việt Nam (UTC+7, không đổi giờ theo mùa) tính bằng số học, không dùng lại đường tính của `centerToday`.
+ */
+export function emptyCenter(now: Date = new Date()): CenterData {
+  const local = new Date(now.getTime() + 7 * 3_600_000).toISOString();
+  return { today: local.slice(0, 10), now: local.slice(11, 16), rooms: [], sessions: [] };
+}
+
 export type CenterKpis = {
   /** Số học viên có buổi học hôm nay, và của cùng thứ tuần trước. */
   studentsToday: { value: number; previous: number };
