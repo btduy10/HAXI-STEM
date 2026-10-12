@@ -25,6 +25,11 @@ export function todayIso(now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE }).format(now);
 }
 
+/** Giờ hiện tại theo giờ Việt Nam, dạng "HH:MM" (24 giờ). */
+export function timeNow(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now);
+}
+
 export const LABELS = {
   teacherStatus: { active: "Đang dạy", inactive: "Ngừng dạy" },
   studentStatus: { active: "Đang học", paused: "Tạm nghỉ", left: "Đã nghỉ" },

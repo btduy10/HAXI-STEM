@@ -1,36 +1,64 @@
 import type { Metadata } from "next";
+import { CenterView } from "@/components/center-3d/center-view";
 import { ClassList } from "@/components/class-list";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { DashboardHero } from "@/components/dashboard-hero";
+import { LinkButton } from "@/components/link-button";
 import { OverdueSessions, TodaySessions } from "@/components/session-lists";
 import { todayIso } from "@/lib/format";
 import { seesAllClasses } from "@/server/guard";
 import { listOverdueSessions } from "@/server/services/attendance";
 import { listClasses } from "@/server/services/classes";
-import { dashboardCharts } from "@/server/services/dashboard";
+import { centerToday, dashboardCharts } from "@/server/services/dashboard";
 import { listSessions } from "@/server/services/sessions";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
 
-export default async function TeacherDashboardPage() {
+const HREF = "/teacher/dashboard";
+
+export default async function TeacherDashboardPage({ searchParams }: PageProps<"/teacher/dashboard">) {
   const user = await requirePageUser("teacher");
   const today = todayIso();
   // Vai trò được xem mọi lớp (vd. Giáo viên trực) thấy số liệu toàn trung tâm.
   const all = seesAllClasses(user.actor);
+  const attendanceHref = (id: string) => `/teacher/sessions/${id}/attendance`;
+  // ?view=3d: giao diện 3D của trung tâm; buổi học theo phạm vi lớp của người dùng, bấm để mở trang điểm danh.
+  if ((await searchParams).view === "3d") {
+    // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có điểm danh nên không bấm vào được.
+    const center = await centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id)));
+    return (
+      <div className="grid gap-6">
+        <DashboardHero
+          name={user.name}
+          description={all ? "Trung tâm hôm nay dưới dạng mô hình 3D." : "Các lớp của bạn hôm nay dưới dạng mô hình 3D."}
+          action={
+            <LinkButton href={HREF} variant="outline" className="h-10">
+              Giao diện thường
+            </LinkButton>
+          }
+        />
+        <CenterView data={center} backHref={HREF} />
+      </div>
+    );
+  }
   const [todaySessions, overdue, classes, charts] = await Promise.all([
     listSessions(user.actor, { from: today, to: today, personal: true }),
     listOverdueSessions(user.actor),
     listClasses(user.actor),
     dashboardCharts(user.actor),
   ]);
-  const attendanceHref = (id: string) => `/teacher/sessions/${id}/attendance`;
 
   return (
     <div className="grid gap-6">
       <DashboardHero
         name={user.name}
         description={all ? "Tổng quan hoạt động của trung tâm hôm nay." : "Tổng quan các lớp của bạn hôm nay."}
+        action={
+          <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
+            Xem 3D
+          </LinkButton>
+        }
       />
       <TodaySessions sessions={todaySessions} hrefOf={(s) => attendanceHref(s.id)} today={today} />
       <OverdueSessions sessions={overdue} hrefOf={attendanceHref} />

@@ -35,14 +35,18 @@ function LeafSprig() {
   );
 }
 
-/** Lời chào đầu trang Tổng quan: tiêu đề lớn kiểu hero, một dòng mô tả và đường kẻ mảnh phân vùng. */
-export function DashboardHero({ name, description }: { name: string; description: string }) {
+/**
+ * Lời chào đầu trang Tổng quan: tiêu đề lớn kiểu hero, một dòng mô tả và đường kẻ mảnh phân vùng.
+ * `action`: nút đổi giao diện (Xem 3D / Giao diện thường), chỉ hiện từ 1024px.
+ */
+export function DashboardHero({ name, description, action }: { name: string; description: string; action?: React.ReactNode }) {
   return (
     <header className="relative grid gap-1.5 border-b pb-5 lg:pr-60">
       <h1 className="text-[clamp(1.625rem,1.15rem+2.1vw,2.875rem)] leading-[1.15] font-medium tracking-tight break-words">
         Xin chào, {name}
       </h1>
       <p className="text-sm text-muted-foreground sm:text-base">{description}</p>
+      {action && <div className="mt-2 hidden lg:block">{action}</div>}
       <LeafSprig />
     </header>
   );

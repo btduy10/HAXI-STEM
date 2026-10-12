@@ -6,7 +6,7 @@ Cả 4 giai đoạn đã hoàn thành: nền tảng, TKB & điểm danh, sao, cu
 
 ## Công nghệ
 
-Next.js 16 (App Router) · TypeScript strict · Tailwind CSS + shadcn/ui · PostgreSQL 17 + Drizzle ORM · Better Auth (tên đăng nhập + TOTP) · Zod · ExcelJS · pdfmake · Vitest · Playwright.
+Next.js 16 (App Router) · TypeScript strict · Tailwind CSS + shadcn/ui · PostgreSQL 17 + Drizzle ORM · Better Auth (tên đăng nhập + TOTP) · Zod · ExcelJS · pdfmake · three.js + React Three Fiber (giao diện 3D ở Tổng quan) · Vitest · Playwright.
 
 ## Chạy trên máy
 
@@ -177,6 +177,17 @@ Kiểu "cửa sổ kính" trên nền thiên nhiên mờ; mọi trang dùng chun
 - **Bố cục:** từ 1280px thanh điều hướng đầy đủ; 768–1279px thu thành dải icon; dưới 768px là menu trượt. Bề rộng thanh điều hướng nằm trong biến `--sidebar-w`.
 - **Hiệu ứng** (CSS thuần, không thêm thư viện): thẻ Tổng quan hiện lần lượt (`stagger`), số KPI đếm tăng (`src/components/count-up.tsx`), biểu đồ vẽ dần (`chart-grow-*`, `chart-draw`), thẻ nổi khi rê chuột (`card-lift`), pill teal trượt giữa các mục menu, nội dung hiện dần khi chuyển trang. Tất cả tắt khi máy bật "giảm chuyển động".
 - **Ảnh so sánh giao diện:** `SHOTS=<tên bộ ảnh> npm run test:e2e` chụp các trang chính ở 360/768/1280/1920px vào `ui-shots/<tên bộ ảnh>/` (không commit).
+
+### Giao diện 3D của trung tâm (trang Tổng quan)
+
+Nút **Xem 3D** ở lời chào của trang Tổng quan (Admin và giáo viên), chỉ hiện từ 1024px. Bấm thì địa chỉ thành `…/dashboard?view=3d` và phần nội dung đổi sang mô hình 3D của trung tâm; nút **Giao diện thường** để quay lại. Dựng bằng React + React Three Fiber (three.js), không dùng game engine.
+
+- **Cảnh:** sảnh có biển HAXI STEM, một hành lang và các phòng của "Phòng & Ca học" xếp hai dãy theo thứ tự tên, phòng to nhỏ theo sức chứa, bàn theo số chỗ (vẽ tối đa 24). **Mặt bằng là tự xếp, không phải mặt bằng thật** (`layoutRooms` ở `src/domain/center-3d.ts`). Kéo chuột để xoay, lăn để phóng to/thu nhỏ, kéo chuột phải để di chuyển.
+- **Trạng thái phòng** theo giờ Việt Nam, trình duyệt tự kiểm tra lại mỗi 20 giây (`roomStatus`): **Đang học** (xanh, có hình người theo sĩ số lớp), **Sắp học** (vàng, ghi giờ bắt đầu), **Đã học xong** và **Trống** (xám). Buổi đã hủy không tính. Nhãn của phòng ghi tên phòng, tên lớp, giờ, người thực dạy (giáo viên dạy thay nếu có), sĩ số/sức chứa.
+- **Bảng bên cạnh** (HTML thường, dùng được bằng bàn phím): danh sách phòng, các buổi hôm nay của phòng đang chọn kèm đường dẫn **Mở buổi học** (Admin: trang buổi học; giáo viên: trang điểm danh), và các buổi hôm nay chưa xếp phòng. Chọn phòng ở bảng hay ở cảnh đều như nhau; phòng nằm ngoài khung nhìn thì máy quay lia tới. Máy không chạy được WebGL thì cảnh báo một dòng, bảng vẫn dùng được.
+- **Dữ liệu** (`centerToday` ở `src/server/services/dashboard.ts`): mọi phòng và các buổi hôm nay trong phạm vi của người dùng (phạm vi do `listSessions` áp như Thời khóa biểu). Chỉ gửi xuống trình duyệt tên lớp, người dạy, giờ, trạng thái hủy và sĩ số; **không có tên hay thông tin nào của học viên**. Chỉ để xem: không sửa lịch hay điểm danh trong cảnh. Buổi thêm/sửa sau khi mở trang chỉ hiện khi tải lại trang.
+- **Chỉ tải khi cần:** cảnh là Client Component nạp bằng `next/dynamic` (`ssr: false`), chỉ gắn khi có `?view=3d` và màn hình từ 1024px; trang khác và điện thoại không tải thư viện 3D. Màn hình hẹp hơn mà mở thẳng `?view=3d` chỉ thấy lời nhắn và nút quay lại. Cảnh chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
+- **CSP không nới:** nhãn phòng là nút HTML do ứng dụng tự đặt vị trí theo từng khung hình, biển tên vẽ bằng canvas 2D; không dùng `Text`/`Environment`/`Html` của drei (tải phông, ảnh từ máy chủ ngoài hoặc tạo gốc React riêng).
 
 ## Gửi email
 

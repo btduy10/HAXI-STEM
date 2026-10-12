@@ -1,9 +1,12 @@
 import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { attendances, classes, sessions, starLogs, students, teachers } from "@/db/schema";
+import { attendances, classes, enrollments, sessions, starLogs, students, teachers } from "@/db/schema";
+import type { CenterData } from "@/domain/center-3d";
 import { addDays, startOfWeek } from "@/lib/dates";
-import { todayIso } from "@/lib/format";
+import { formatTime, timeNow, todayIso } from "@/lib/format";
 import { type Actor, allowedClassIds, assertAdmin } from "../guard";
+import { listRooms } from "./catalog";
+import { type SessionRow, listSessions } from "./sessions";
 
 export async function adminOverview(actor: Actor) {
   assertAdmin(actor);
@@ -84,5 +87,46 @@ export async function dashboardCharts(actor: Actor, now: Date = new Date()): Pro
       rate: r.total === 0 ? 0 : Math.round((r.attended / r.total) * 1000) / 10,
     })),
     starsByWeek: weeks.map((weekStart) => ({ weekStart, stars: starsOf.get(weekStart) ?? 0 })),
+  };
+}
+
+/**
+ * Dữ liệu của giao diện 3D trung tâm ở trang Tổng quan: mọi phòng và các buổi hôm nay trong phạm vi của người dùng
+ * (phạm vi do `listSessions` áp). Chỉ gồm tên lớp, người thực dạy, giờ, trạng thái hủy và sĩ số;
+ * không có tên hay thông tin nào của học viên. `hrefOf`: trang mở buổi học, null nếu buổi không bấm vào được.
+ */
+export async function centerToday(actor: Actor, hrefOf: (session: SessionRow) => string | null, now: Date = new Date()): Promise<CenterData> {
+  const today = todayIso(now);
+  const [roomRows, sessionRows] = await Promise.all([
+    listRooms(actor),
+    listSessions(actor, { from: today, to: today, includeTimetableOnly: true }),
+  ]);
+  // Sĩ số: số học viên đang ghi danh của lớp. Lớp chỉ hiển thị trên Thời khóa biểu không có học viên.
+  const classIds = [...new Set(sessionRows.filter((s) => !s.timetableOnly).map((s) => s.classId))];
+  const counts =
+    classIds.length === 0
+      ? []
+      : await db
+          .select({ classId: enrollments.classId, n: count() })
+          .from(enrollments)
+          .where(and(inArray(enrollments.classId, classIds), eq(enrollments.status, "active")))
+          .groupBy(enrollments.classId);
+  const countOf = new Map(counts.map((c) => [c.classId, c.n]));
+  return {
+    today,
+    now: timeNow(now),
+    rooms: roomRows.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity })),
+    sessions: sessionRows.map((s) => ({
+      id: s.id,
+      roomId: s.roomId,
+      className: s.className,
+      teacherName: s.substituteShortName || s.substituteName || s.teacherShortName || s.teacherName || null,
+      startTime: formatTime(s.startTime),
+      endTime: formatTime(s.endTime),
+      cancelled: s.status === "cancelled",
+      timetableOnly: s.timetableOnly,
+      studentCount: s.timetableOnly ? null : (countOf.get(s.classId) ?? 0),
+      href: hrefOf(s),
+    })),
   };
 }

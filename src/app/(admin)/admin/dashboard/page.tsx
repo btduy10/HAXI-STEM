@@ -1,17 +1,39 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CenterView } from "@/components/center-3d/center-view";
 import { CountUp } from "@/components/count-up";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { DashboardHero } from "@/components/dashboard-hero";
+import { LinkButton } from "@/components/link-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listOverdueSessions } from "@/server/services/attendance";
-import { adminOverview, dashboardCharts } from "@/server/services/dashboard";
+import { adminOverview, centerToday, dashboardCharts } from "@/server/services/dashboard";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
 
-export default async function AdminDashboardPage() {
+const HREF = "/admin/dashboard";
+
+export default async function AdminDashboardPage({ searchParams }: PageProps<"/admin/dashboard">) {
   const user = await requirePageUser("admin");
+  // ?view=3d: giao diện 3D của trung tâm thay cho phần số liệu; chỉ khi đó mới đọc dữ liệu phòng và buổi hôm nay.
+  if ((await searchParams).view === "3d") {
+    const center = await centerToday(user.actor, (s) => `/admin/sessions/${s.id}`);
+    return (
+      <div className="grid gap-6">
+        <DashboardHero
+          name={user.name}
+          description="Trung tâm hôm nay dưới dạng mô hình 3D."
+          action={
+            <LinkButton href={HREF} variant="outline" className="h-10">
+              Giao diện thường
+            </LinkButton>
+          }
+        />
+        <CenterView data={center} backHref={HREF} />
+      </div>
+    );
+  }
   const [overview, overdue, charts] = await Promise.all([
     adminOverview(user.actor),
     listOverdueSessions(user.actor),
@@ -25,7 +47,15 @@ export default async function AdminDashboardPage() {
   ];
   return (
     <div className="grid gap-6">
-      <DashboardHero name={user.name} description="Tổng quan hoạt động của trung tâm hôm nay." />
+      <DashboardHero
+        name={user.name}
+        description="Tổng quan hoạt động của trung tâm hôm nay."
+        action={
+          <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
+            Xem 3D
+          </LinkButton>
+        }
+      />
       <div className="stagger grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
           <Link key={s.href} href={s.href} className="rounded-3xl focus-visible:outline-2">
