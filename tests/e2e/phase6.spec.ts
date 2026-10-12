@@ -78,7 +78,8 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
   expect(pageErrors).toEqual([]);
 });
 
-test("Tổng quan: nút Xem 3D chỉ có từ laptop; cảnh 3D trung tâm hiện phòng và buổi hôm nay theo phạm vi của người dùng, bấm phòng mở được buổi học", async ({ page, browser }) => {
+// Giao diện 3D đang tạm tắt trên bản chạy thật (CENTER_3D = false ở hai trang Tổng quan) nên bài này tạm ngưng tới khi bật lại.
+test.fixme("Tổng quan: nút Xem 3D chỉ có từ laptop; cảnh 3D trung tâm hiện phòng và buổi hôm nay theo phạm vi của người dùng, bấm phòng mở được buổi học", async ({ page, browser }) => {
   test.setTimeout(240_000);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));

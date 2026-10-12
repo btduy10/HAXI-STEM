@@ -180,6 +180,8 @@ Kiểu "cửa sổ kính" trên nền thiên nhiên mờ; mọi trang dùng chun
 
 ### Giao diện 3D của trung tâm (trang Tổng quan)
 
+> **Đang tạm tắt.** Trên bản chạy thật, mở `?view=3d` báo lỗi máy chủ (chưa rõ nguyên nhân), nên nút "Xem 3D" và nhánh `?view=3d` được tắt bằng hằng `CENTER_3D = false` ở hai trang Tổng quan; địa chỉ `?view=3d` hiện giao diện thường. Phần mô tả dưới đây là của tính năng khi bật.
+
 Nút **Xem 3D** ở lời chào của trang Tổng quan (Admin và giáo viên), chỉ hiện từ 1024px. Bấm thì địa chỉ thành `…/dashboard?view=3d` và phần nội dung đổi sang mô hình 3D của trung tâm; nút **Giao diện thường** để quay lại. Dựng bằng React + React Three Fiber (three.js), không dùng game engine.
 
 - **Cảnh:** sảnh có biển HAXI STEM, một hành lang và các phòng của "Phòng & Ca học" xếp hai dãy theo thứ tự tên, phòng to nhỏ theo sức chứa, bàn theo số chỗ (vẽ tối đa 24). **Mặt bằng là tự xếp, không phải mặt bằng thật** (`layoutRooms` ở `src/domain/center-3d.ts`). Kéo chuột để xoay, lăn để phóng to/thu nhỏ, kéo chuột phải để di chuyển.

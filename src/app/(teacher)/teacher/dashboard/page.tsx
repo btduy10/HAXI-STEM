@@ -16,6 +16,9 @@ import { requirePageUser } from "@/server/session";
 export const metadata: Metadata = { title: "Tổng quan" };
 
 const HREF = "/teacher/dashboard";
+// Giao diện 3D đang TẠM TẮT: trên bản chạy thật, mở ?view=3d báo lỗi máy chủ (chưa rõ nguyên nhân). Tắt cả nút "Xem 3D" lẫn
+// nhánh ?view=3d (địa chỉ cũ hiện giao diện thường) cho tới khi sửa xong.
+const CENTER_3D: boolean = false;
 
 export default async function TeacherDashboardPage({ searchParams }: PageProps<"/teacher/dashboard">) {
   const user = await requirePageUser("teacher");
@@ -24,7 +27,7 @@ export default async function TeacherDashboardPage({ searchParams }: PageProps<"
   const all = seesAllClasses(user.actor);
   const attendanceHref = (id: string) => `/teacher/sessions/${id}/attendance`;
   // ?view=3d: giao diện 3D của trung tâm; buổi học theo phạm vi lớp của người dùng, bấm để mở trang điểm danh.
-  if ((await searchParams).view === "3d") {
+  if (CENTER_3D && (await searchParams).view === "3d") {
     // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có điểm danh nên không bấm vào được.
     const center = await centerToday(user.actor, (s) => (s.timetableOnly ? null : attendanceHref(s.id)));
     return (
@@ -55,9 +58,11 @@ export default async function TeacherDashboardPage({ searchParams }: PageProps<"
         name={user.name}
         description={all ? "Tổng quan hoạt động của trung tâm hôm nay." : "Tổng quan các lớp của bạn hôm nay."}
         action={
-          <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
-            Xem 3D
-          </LinkButton>
+          CENTER_3D ? (
+            <LinkButton href={`${HREF}?view=3d`} variant="outline" className="h-10">
+              Xem 3D
+            </LinkButton>
+          ) : undefined
         }
       />
       <TodaySessions sessions={todaySessions} hrefOf={(s) => attendanceHref(s.id)} today={today} />
