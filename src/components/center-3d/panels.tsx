@@ -1,51 +1,34 @@
 "use client";
 
-import { ArrowLeftIcon, HomeIcon, type LucideIcon, MinusIcon, PlusIcon, RotateCwIcon, ScanIcon } from "lucide-react";
+import { ArrowDownRightIcon, ArrowUpRightIcon, CheckIcon, HomeIcon, type LucideIcon, MinusIcon, PlusIcon, RotateCwIcon, ScanIcon } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { CountUp } from "@/components/count-up";
-import {
-  type CenterRoom,
-  type CenterSession,
-  type DayProgress,
-  ROOM_STATE_LABELS,
-  type RoomState,
-  minutesOf,
-  sessionProgress,
-} from "@/domain/center-3d";
-import { formatDate } from "@/lib/format";
+import { type CenterSession, type DayProgress, type KpiDelta, type SessionStep, minutesOf, sessionProgress } from "@/domain/center-3d";
 import { cn } from "@/lib/utils";
+import type { CenterSessionDetail } from "@/server/services/center-detail";
 import type { SceneApi } from "./center-scene";
-import { STATE_DOT } from "./theme";
-import type { OverdueItem } from "./top-bar";
+import type { StagePerms } from "./detail-panels";
+import { ATTENDANCE, Bar, Chip, ErrorNote, Skeleton, Stars, emptyBox, focusRing, listRow, sessionState } from "./parts";
+import type { Remote } from "./use-remote";
 
 // Các thẻ trắng nổi trên cảnh 3D của trang Tổng quan. Mọi thẻ là HTML thường: dùng được bằng bàn phím và trên điện thoại.
 
 export type StageKpi = {
   label: string;
-  value: number;
+  /** null = chưa có dữ liệu (ghi "–"). */
+  value: number | null;
+  /** Đơn vị ghi sau số, vd. "%". */
+  suffix?: string;
   /** Trang của số liệu; null khi không có trang riêng (thẻ không bấm được). */
   href: string | null;
   /** Số cần chú ý (vd. buổi quá hạn) khi lớn hơn 0. */
   alert?: boolean;
+  /** Chênh lệch so với kỳ trước, kèm tên kỳ trước ("tuần trước"). Không có thì không vẽ mũi tên. */
+  delta?: (KpiDelta & { versus: string }) | null;
 };
-export type StageClass = { id: string; title: string; detail: string; href: string };
-export type RoomRow = { room: CenterRoom; state: RoomState; session: CenterSession | null };
 
-const focusRing = "outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
-const empty = "rounded-xl border border-dashed p-3 text-center text-sm text-ink-soft";
-
-/** Trạng thái của một buổi lúc `now`, để ghi huy hiệu ở danh sách. */
-function sessionState(session: CenterSession, now: string): { label: string; className: string } {
-  if (session.cancelled) return { label: "Đã hủy", className: "bg-muted text-ink-soft" };
-  if (session.endTime <= now) return { label: "Đã xong", className: "bg-state-done/45 text-primary-strong" };
-  if (session.startTime <= now) return { label: "Đang học", className: "bg-primary text-primary-foreground" };
-  return { label: "Sắp học", className: "bg-brand-gold-soft text-foreground" };
-}
-
-function Chip({ className, children }: { className?: string; children: ReactNode }) {
-  return <span className={cn("inline-flex h-5.5 shrink-0 items-center rounded-full px-2 text-xs font-medium whitespace-nowrap", className)}>{children}</span>;
-}
+const DELTA_WORD = { up: "tăng", down: "giảm", flat: "không đổi" } as const;
 
 /** Hàng thẻ KPI. Thẻ có trang riêng là một đường dẫn tới trang của số liệu đó. */
 export function Kpis({ items, className }: { items: StageKpi[]; className?: string }) {
@@ -53,16 +36,45 @@ export function Kpis({ items, className }: { items: StageKpi[]; className?: stri
   return (
     <ul className={cn("grid grid-cols-2 gap-2 md:flex", className)} aria-label="Số liệu chính">
       {items.map((item) => {
+        const delta = item.delta;
+        const amount = delta ? `${delta.diff}${item.suffix ?? ""}` : "";
         const body = (
           <>
             <span className="text-xs leading-tight text-ink-soft">{item.label}</span>
-            <span className={cn("text-3xl leading-none font-semibold tabular-nums", item.alert && item.value > 0 ? "text-danger" : "text-foreground")}>
-              <CountUp value={item.value} />
+            <span className="flex items-end justify-between gap-1.5">
+              <span className={cn("text-3xl leading-none font-semibold tabular-nums", item.alert && (item.value ?? 0) > 0 ? "text-danger" : "text-foreground")} data-kpi-value>
+                {item.value === null ? (
+                  "–"
+                ) : (
+                  <>
+                    {/* Hiệu ứng đếm chỉ làm việc với số nguyên (tỉ lệ có phần thập phân ghi thẳng) và chỉ chạy lúc gắn: số đổi sau khi
+                        dữ liệu được làm mới thì gắn lại để hiện số mới. */}
+                    {Number.isInteger(item.value) ? <CountUp key={item.value} value={item.value} /> : item.value}
+                    {item.suffix && <span className="text-lg">{item.suffix}</span>}
+                  </>
+                )}
+              </span>
+              {delta && (
+                <span
+                  data-kpi-delta={delta.direction}
+                  title={`So với ${delta.versus}`}
+                  className={cn(
+                    "flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.6875rem] leading-none font-medium tabular-nums",
+                    delta.direction === "up" ? "bg-primary-soft text-primary-strong" : delta.direction === "down" ? "bg-danger/10 text-danger" : "bg-muted text-ink-soft",
+                  )}
+                >
+                  {delta.direction === "up" ? <ArrowUpRightIcon className="size-3" aria-hidden /> : delta.direction === "down" ? <ArrowDownRightIcon className="size-3" aria-hidden /> : <MinusIcon className="size-3" aria-hidden />}
+                  <span aria-hidden>{delta.direction === "flat" ? "0" : amount}</span>
+                  <span className="sr-only">
+                    {delta.direction === "flat" ? `không đổi so với ${delta.versus}` : `${DELTA_WORD[delta.direction]} ${amount} so với ${delta.versus}`}
+                  </span>
+                </span>
+              )}
             </span>
           </>
         );
         return (
-          <li key={item.label} className="min-w-0 md:w-37">
+          <li key={item.label} className="min-w-0 md:w-37" data-kpi={item.label}>
             {item.href ? (
               <Link href={item.href} className={cn(card, "transition-transform hover:-translate-y-0.5 motion-reduce:transition-none", focusRing)}>
                 {body}
@@ -77,154 +89,17 @@ export function Kpis({ items, className }: { items: StageKpi[]; className?: stri
   );
 }
 
-function SessionItem({ session, capacity, now }: { session: CenterSession; capacity: number | null; now: string }) {
-  const state = sessionState(session, now);
-  return (
-    <li className="grid grid-cols-1 gap-1 rounded-xl border bg-background/70 p-2.5 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold tabular-nums">
-          {session.startTime}–{session.endTime}
-        </span>
-        <Chip className={state.className}>{state.label}</Chip>
-      </div>
-      <span className="break-words">{session.className}</span>
-      <span className="text-ink-soft">
-        {session.teacherName ? `GV: ${session.teacherName}` : "Chưa có giáo viên"}
-        {session.studentCount !== null && ` · Sĩ số ${session.studentCount}${capacity === null ? "" : `/${capacity}`}`}
-        {session.timetableOnly && " · Chỉ giữ phòng"}
-      </span>
-      {session.href && (
-        <Link href={session.href} className={cn("w-fit rounded font-medium text-primary underline-offset-2 hover:underline", focusRing)}>
-          Mở buổi học
-        </Link>
-      )}
-    </li>
-  );
-}
-
 /**
- * Thẻ chi tiết bên phải: chưa chọn phòng thì là danh sách phòng theo trạng thái; chọn một phòng (ở đây, ở cảnh 3D hoặc qua
- * tìm kiếm) thì hiện các buổi hôm nay của phòng kèm đường mở buổi học.
+ * Thẻ tiến trình. Có buổi đang chọn: năm bước của buổi (Lên lịch → Điểm danh → Đang học → Chấm sao → Hoàn tất) kèm giờ thật
+ * của từng bước. Chưa chọn buổi: tiến trình của cả ngày và thanh tiến trình của các buổi đang học.
  */
-export function RoomPanel({
-  className,
-  today,
-  now,
-  rooms,
-  sessionsOf,
-  unplaced,
-  selectedId,
-  onSelect,
-}: {
-  className?: string;
-  today: string;
-  now: string;
-  rooms: RoomRow[];
-  sessionsOf: Map<string, CenterSession[]>;
-  /** Buổi hôm nay chưa xếp phòng. */
-  unplaced: CenterSession[];
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-}) {
-  const selected = rooms.find((row) => row.room.id === selectedId) ?? null;
-  const sessions = selected ? [...(sessionsOf.get(selected.room.id) ?? [])].sort((a, b) => a.startTime.localeCompare(b.startTime)) : [];
-  return (
-    <section aria-label="Phòng học hôm nay" className={cn("panel flex min-h-0 flex-col gap-3 p-3.5", className)}>
-      {selected ? (
-        <>
-          <div className="grid gap-2">
-            <button type="button" onClick={() => onSelect(null)} className={cn("flex w-fit items-center gap-1 rounded-full text-xs font-medium text-primary hover:underline", focusRing)}>
-              <ArrowLeftIcon className="size-3.5" aria-hidden />
-              Tất cả phòng
-            </button>
-            <div className="flex items-start justify-between gap-2">
-              <h2 className="min-w-0 text-base leading-tight font-semibold break-words">{selected.room.name}</h2>
-              <Chip className="bg-primary-soft text-primary-strong">
-                <span aria-hidden className={cn("mr-1.5 size-2 rounded-full", STATE_DOT[selected.state])} />
-                {ROOM_STATE_LABELS[selected.state]}
-              </Chip>
-            </div>
-            <p className="text-sm text-ink-soft">
-              Sức chứa {selected.room.capacity} chỗ · {sessions.length} buổi hôm nay
-            </p>
-          </div>
-          {sessions.length === 0 ? (
-            <p className={empty}>Hôm nay phòng không có buổi học.</p>
-          ) : (
-            <ul className="grid min-h-0 grid-cols-1 content-start gap-1.5 overflow-y-auto" aria-live="polite">
-              {sessions.map((session) => (
-                <SessionItem key={session.id} session={session} capacity={selected.room.capacity} now={now} />
-              ))}
-            </ul>
-          )}
-        </>
-      ) : (
-        <>
-          <div>
-            <h2 className="text-base leading-tight font-semibold">Phòng học hôm nay</h2>
-            <p className="text-sm text-ink-soft">{formatDate(today)} · bấm một phòng để xem buổi học</p>
-          </div>
-          <div className="grid min-h-0 grid-cols-1 content-start gap-3 overflow-y-auto">
-            {rooms.length === 0 ? (
-              <p className={empty}>Chưa có phòng học nào. Thêm phòng ở Phòng &amp; Ca học.</p>
-            ) : (
-              <ul className="grid grid-cols-1 gap-1.5">
-                {rooms.map(({ room, state, session }) => (
-                  <li key={room.id}>
-                    <button
-                      type="button"
-                      data-room={room.name}
-                      data-state={state}
-                      onClick={() => onSelect(room.id)}
-                      className={cn("flex min-h-11 w-full items-center gap-2.5 rounded-xl border bg-background/70 px-3 py-2 text-left text-sm transition-colors hover:bg-primary-soft", focusRing)}
-                    >
-                      <span aria-hidden className={cn("size-2.5 shrink-0 rounded-full", STATE_DOT[state])} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{room.name}</span>
-                        <span className="block truncate text-xs text-ink-soft">
-                          {ROOM_STATE_LABELS[state]}
-                          {session && state !== "done" && ` · ${session.startTime}–${session.endTime} · ${session.className}`}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-xs text-ink-soft tabular-nums">{room.capacity} chỗ</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {unplaced.length > 0 && (
-              <div className="grid grid-cols-1 gap-1.5">
-                <h3 className="text-sm font-medium">Buổi chưa xếp phòng</h3>
-                <ul className="grid grid-cols-1 gap-1.5">
-                  {unplaced.map((session) => (
-                    <SessionItem key={session.id} session={session} capacity={null} now={now} />
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Bar({ value, label, className }: { value: number; label: string; className?: string }) {
-  const percent = Math.round(Math.min(1, Math.max(0, value)) * 100);
-  return (
-    <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className={cn("h-2 overflow-hidden rounded-full bg-primary-soft", className)}>
-      <div className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${percent}%` }} />
-    </div>
-  );
-}
-
-/** Thẻ tiến trình buổi học hôm nay: phần trăm của ngày, số buổi theo trạng thái và thanh tiến trình của từng buổi đang học. */
 export function ProgressPanel({
   className,
   progress,
   live,
   now,
   roomNameOf,
+  selected,
 }: {
   className?: string;
   progress: DayProgress;
@@ -232,7 +107,58 @@ export function ProgressPanel({
   live: CenterSession[];
   now: string;
   roomNameOf: (roomId: string | null) => string | null;
+  /** Buổi đang chọn và các bước của nó. */
+  selected: { session: CenterSession; steps: SessionStep[] } | null;
 }) {
+  if (selected) {
+    const { session, steps } = selected;
+    const done = steps.filter((step) => step.state === "done").length;
+    return (
+      <section aria-label="Tiến trình buổi học đang chọn" className={cn("panel grid content-start gap-3 p-3.5", className)}>
+        <div className="flex items-end justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="text-base leading-tight font-semibold">Tiến trình buổi học</h2>
+            <p className="truncate text-sm text-ink-soft">
+              {session.className} · {session.startTime}–{session.endTime}
+            </p>
+          </div>
+          <p className="shrink-0 text-2xl leading-none font-semibold text-brand-gold tabular-nums">
+            {done}/{steps.length}
+          </p>
+        </div>
+        {session.cancelled && <p className="rounded-xl bg-muted px-3 py-2 text-sm text-ink-soft">Buổi đã hủy nên các bước sau không diễn ra.</p>}
+        <ol className="grid grid-cols-1" data-session-steps>
+          {steps.map((step, index) => (
+            <li key={step.key} data-step={step.key} data-step-state={step.state} className="flex gap-2.5">
+              <span className="flex flex-col items-center" aria-hidden>
+                <span
+                  className={cn(
+                    "grid size-5 shrink-0 place-items-center rounded-full border-2",
+                    step.state === "done" ? "border-primary bg-primary text-primary-foreground" : step.state === "current" ? "border-brand-gold bg-brand-gold-soft" : "border-state-idle bg-card",
+                  )}
+                >
+                  {step.state === "done" && <CheckIcon className="size-3" strokeWidth={3} />}
+                  {step.state === "current" && <span className="size-1.5 animate-pulse rounded-full bg-brand-gold motion-reduce:animate-none" />}
+                </span>
+                {index < steps.length - 1 && <span className={cn("w-0.5 flex-1", step.state === "done" ? "bg-primary" : "bg-state-idle")} />}
+              </span>
+              <span className={cn("flex min-w-0 flex-1 items-baseline justify-between gap-2 text-sm", index < steps.length - 1 && "pb-2.5")}>
+                <span className={cn("font-medium", step.state === "pending" && "font-normal text-ink-soft")}>
+                  {step.label}
+                  <span className="sr-only">: {step.state === "done" ? "đã xong" : step.state === "current" ? "đang chờ" : "chưa tới"}</span>
+                </span>
+                <span className="shrink-0 text-xs text-ink-soft tabular-nums">{step.at ?? (step.state === "current" ? "đang chờ" : step.state === "done" ? "" : "chưa")}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+        <p className="border-t pt-2.5 text-xs text-ink-soft">
+          Cả ngày: {progress.done}/{progress.total} buổi đã xong · {progress.percent}%
+        </p>
+      </section>
+    );
+  }
+
   const stats = [
     { label: "Đang học", value: progress.live, dot: "bg-state-live" },
     { label: "Sắp học", value: progress.upcoming, dot: "bg-state-upcoming" },
@@ -287,39 +213,52 @@ export function ProgressPanel({
   );
 }
 
-type ListTab = "today" | "overdue" | "classes";
+export type TeacherRow = { id: string; name: string; total: number; done: number; live: boolean };
+type ListTab = "classes" | "teachers" | "students";
 
-/** Thẻ danh sách có tab: buổi hôm nay, buổi quá hạn chưa điểm danh, và các lớp (theo phạm vi của người dùng). */
+/**
+ * Thẻ danh sách có tab: Lớp (các buổi hôm nay), Giáo viên (người dạy hôm nay), Học viên (của buổi đang chọn).
+ * Mỗi dòng có thanh trạng thái; bấm một dòng là chọn đối tượng đó (cảnh 3D bay tới, thẻ chi tiết đổi theo).
+ */
 export function ListsPanel({
   className,
   now,
   sessions,
+  teachers,
   roomNameOf,
-  overdue,
-  overdueTotal,
-  overdueHref,
-  classes,
-  classesLabel,
-  classesEmpty,
+  selectedSessionId,
+  selectedPersonId,
+  selectedClassName,
+  roster,
+  perms,
+  onSession,
+  onTeacher,
+  onStudent,
 }: {
   className?: string;
   now: string;
   sessions: CenterSession[];
+  teachers: TeacherRow[];
   roomNameOf: (roomId: string | null) => string | null;
-  overdue: OverdueItem[];
-  overdueTotal: number;
-  overdueHref: string | null;
-  classes: StageClass[];
-  classesLabel: string;
-  classesEmpty: string;
+  selectedSessionId: string | null;
+  selectedPersonId: string | null;
+  /** Tên lớp của buổi đang chọn (cho tab Học viên). */
+  selectedClassName: string | null;
+  /** Danh sách học viên của buổi đang chọn; chỉ có khi đã chọn một buổi có học viên. */
+  roster: Remote<CenterSessionDetail> | null;
+  perms: StagePerms;
+  onSession: (id: string) => void;
+  onTeacher: (id: string, name: string) => void;
+  onStudent: (id: string, name: string) => void;
 }) {
-  const [tab, setTab] = useState<ListTab>("today");
-  const tabs: { key: ListTab; label: string; count: number }[] = [
-    { key: "today", label: "Hôm nay", count: sessions.length },
-    { key: "overdue", label: "Quá hạn", count: overdueTotal },
-    { key: "classes", label: classesLabel, count: classes.length },
+  const [tab, setTab] = useState<ListTab>("classes");
+  const students = roster?.data?.students ?? null;
+  const tabs: { key: ListTab; label: string; count: number | null }[] = [
+    { key: "classes", label: "Lớp", count: sessions.length },
+    { key: "teachers", label: "Giáo viên", count: teachers.length },
+    { key: "students", label: "Học viên", count: students ? students.length : null },
   ];
-  const row = cn("grid grid-cols-1 gap-0.5 rounded-xl border bg-background/70 px-3 py-2 text-sm", focusRing);
+  const picked = "border-primary bg-primary-soft";
   return (
     <section aria-label="Danh sách" className={cn("panel flex min-h-0 flex-col gap-2.5 p-3.5", className)}>
       <div role="tablist" aria-label="Chọn danh sách" className="flex gap-1 rounded-full bg-primary-soft p-1">
@@ -339,86 +278,107 @@ export function ListsPanel({
             )}
           >
             {item.label}
-            <span className="tabular-nums opacity-80">({item.count})</span>
+            {item.count !== null && <span className="tabular-nums opacity-80">({item.count})</span>}
           </button>
         ))}
       </div>
       <div id="stage-tabpanel" role="tabpanel" aria-labelledby={`stage-tab-${tab}`} className="grid min-h-0 grid-cols-1 content-start gap-1.5 overflow-y-auto">
-        {tab === "today" &&
+        {tab === "classes" &&
           (sessions.length === 0 ? (
-            <p className={empty}>Hôm nay không có buổi học.</p>
+            <p className={emptyBox}>Hôm nay không có buổi học.</p>
           ) : (
             <ul className="grid grid-cols-1 gap-1.5">
               {sessions.map((session) => {
                 const state = sessionState(session, now);
                 const room = roomNameOf(session.roomId);
-                const body = (
-                  <>
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="font-semibold tabular-nums">
-                        {session.startTime}–{session.endTime}
-                      </span>
-                      <Chip className={state.className}>{state.label}</Chip>
-                    </span>
-                    <span className="truncate">{session.className}</span>
-                    <span className="truncate text-xs text-ink-soft">
-                      {[room ?? "Chưa xếp phòng", session.teacherName].filter(Boolean).join(" · ")}
-                    </span>
-                  </>
-                );
                 return (
                   <li key={session.id} data-session={session.className}>
-                    {session.href ? (
-                      <Link href={session.href} className={cn(row, "hover:bg-primary-soft")}>
-                        {body}
-                      </Link>
-                    ) : (
-                      <div className={row}>{body}</div>
-                    )}
+                    <button type="button" aria-pressed={session.id === selectedSessionId} onClick={() => onSession(session.id)} className={cn(listRow, session.id === selectedSessionId && picked)}>
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate font-medium">{session.className}</span>
+                        <Chip className={state.className}>{state.label}</Chip>
+                      </span>
+                      <span className="truncate text-xs text-ink-soft">
+                        <span className="tabular-nums">
+                          {session.startTime}–{session.endTime}
+                        </span>
+                        {" · "}
+                        {[room ?? "Chưa xếp phòng", session.teacherName].filter(Boolean).join(" · ")}
+                        {!session.timetableOnly && !session.cancelled && (session.attendanceCount > 0 ? " · đã điểm danh" : session.startTime <= now ? " · chưa điểm danh" : "")}
+                      </span>
+                      <Bar value={session.cancelled ? 0 : sessionProgress(session, now)} label={`Tiến trình buổi ${session.className}`} className="mt-0.5 h-1.5" fill={state.bar} />
+                    </button>
                   </li>
                 );
               })}
             </ul>
           ))}
-        {tab === "overdue" &&
-          (overdue.length === 0 ? (
-            <p className={empty}>Không có buổi nào quá hạn.</p>
+        {tab === "teachers" &&
+          (teachers.length === 0 ? (
+            <p className={emptyBox}>Hôm nay chưa có giáo viên nào đứng lớp.</p>
           ) : (
             <ul className="grid grid-cols-1 gap-1.5">
-              {overdue.map((item) => (
-                <li key={item.id}>
-                  <Link href={item.href} className={cn(row, "hover:bg-primary-soft")}>
+              {teachers.map((teacher) => (
+                <li key={teacher.id} data-teacher={teacher.name}>
+                  <button type="button" aria-pressed={teacher.id === selectedPersonId} onClick={() => onTeacher(teacher.id, teacher.name)} className={cn(listRow, teacher.id === selectedPersonId && picked)}>
                     <span className="flex items-center justify-between gap-2">
-                      <span className="truncate font-medium">{item.title}</span>
-                      <Chip className={item.locked ? "bg-muted text-ink-soft" : "bg-danger/12 text-danger"}>{item.locked ? "Đã khóa" : "Cần điểm danh"}</Chip>
+                      <span className="min-w-0 truncate font-medium">{teacher.name}</span>
+                      <Chip className={teacher.live ? "bg-primary text-primary-foreground" : teacher.done === teacher.total ? "bg-state-done/45 text-primary-strong" : "bg-brand-gold-soft text-foreground"}>
+                        {teacher.live ? "Đang dạy" : teacher.done === teacher.total ? "Đã dạy xong" : "Sắp dạy"}
+                      </Chip>
                     </span>
-                    <span className="text-xs text-ink-soft">{item.detail}</span>
-                  </Link>
+                    <span className="text-xs text-ink-soft tabular-nums">
+                      {teacher.done}/{teacher.total} buổi hôm nay đã xong
+                    </span>
+                    <Bar value={teacher.total === 0 ? 0 : teacher.done / teacher.total} label={`Số buổi đã dạy xong của ${teacher.name}`} className="mt-0.5 h-1.5" />
+                  </button>
                 </li>
               ))}
-              {overdueHref && overdueTotal > overdue.length && (
-                <li>
-                  <Link href={overdueHref} className={cn("block rounded-xl px-3 py-2 text-sm font-medium text-primary hover:underline", focusRing)}>
-                    Xem tất cả {overdueTotal} buổi ở Điểm danh
-                  </Link>
-                </li>
-              )}
             </ul>
           ))}
-        {tab === "classes" &&
-          (classes.length === 0 ? (
-            <p className={empty}>{classesEmpty}</p>
+        {tab === "students" &&
+          (!roster ? (
+            <p className={emptyBox}>Chọn một lớp ở tab Lớp hoặc bấm một phòng để xem học viên của buổi đó.</p>
+          ) : !perms.attendance ? (
+            <p className={emptyBox}>Bạn không có quyền xem danh sách học viên của buổi.</p>
+          ) : roster.error ? (
+            <ErrorNote message={roster.error} onRetry={roster.retry} />
+          ) : !students ? (
+            <Skeleton rows={3} label="Đang tải danh sách học viên" />
+          ) : students.length === 0 ? (
+            <p className={emptyBox}>Buổi học không có học viên nào.</p>
           ) : (
-            <ul className="grid grid-cols-1 gap-1.5">
-              {classes.map((item) => (
-                <li key={item.id}>
-                  <Link href={item.href} className={cn(row, "hover:bg-primary-soft")}>
-                    <span className="truncate font-medium">{item.title}</span>
-                    <span className="truncate text-xs text-ink-soft">{item.detail}</span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <>
+              {selectedClassName && <p className="px-1 text-xs text-ink-soft">{selectedClassName}</p>}
+              <ul className="grid grid-cols-1 gap-1.5">
+                {students.map((student) => {
+                  const mark = student.status ? ATTENDANCE[student.status] : null;
+                  const body = (
+                    <>
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate font-medium">{student.fullName}</span>
+                        <Stars session={student.sessionStars} total={student.total} />
+                      </span>
+                      <span className="truncate text-xs text-ink-soft">
+                        {student.code} · {mark ? mark.label : "Chưa điểm danh"}
+                      </span>
+                      <span aria-hidden className={cn("mt-0.5 h-1.5 rounded-full", mark ? mark.dot : "bg-primary-soft")} />
+                    </>
+                  );
+                  return (
+                    <li key={student.studentId}>
+                      {perms.students ? (
+                        <button type="button" aria-pressed={student.studentId === selectedPersonId} onClick={() => onStudent(student.studentId, student.fullName)} className={cn(listRow, student.studentId === selectedPersonId && picked)}>
+                          {body}
+                        </button>
+                      ) : (
+                        <div className={cn(listRow, "hover:bg-background/70")}>{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           ))}
       </div>
     </section>

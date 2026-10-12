@@ -8,11 +8,13 @@ import {
   ROOM_DEPTH,
   type Rect,
   dayProgress,
+  kpiDelta,
   layoutCampus,
   minutesOf,
   roomFront,
   roomStatus,
   sessionProgress,
+  sessionSteps,
 } from "@/domain/center-3d";
 import { timeNow } from "@/lib/format";
 
@@ -98,14 +100,18 @@ describe("dashboard 3D: bố trí khuôn viên", () => {
 describe("dashboard 3D: trạng thái phòng và tiến trình buổi học theo giờ", () => {
   const session = (id: string, startTime: string, endTime: string, extra: Partial<CenterSession> = {}): CenterSession => ({
     id,
+    classId: `lop-${id}`,
     roomId: "r",
     className: `Lớp ${id}`,
+    teacherId: "gv",
     teacherName: "GV",
     startTime,
     endTime,
     cancelled: false,
     timetableOnly: false,
     studentCount: 4,
+    attendanceCount: 0,
+    starLogCount: 0,
     href: null,
     ...extra,
   });
@@ -151,6 +157,48 @@ describe("dashboard 3D: trạng thái phòng và tiến trình buổi học theo
     expect(dayProgress(sessions, "08:45")).toEqual({ total: 3, done: 0, live: 1, upcoming: 2, cancelled: 1, percent: 17 });
     expect(dayProgress(sessions, "12:00")).toEqual({ total: 3, done: 1, live: 0, upcoming: 2, cancelled: 1, percent: 33 });
     expect(dayProgress(sessions, "23:00")).toEqual({ total: 3, done: 3, live: 0, upcoming: 0, cancelled: 1, percent: 100 });
+  });
+
+  it("năm bước của một buổi: Lên lịch → Điểm danh → Đang học → Chấm sao → Hoàn tất", () => {
+    const morning = { startTime: "08:00", endTime: "09:30", cancelled: false };
+    const states = (now: string, attended: boolean, starred: boolean) =>
+      sessionSteps({ ...morning, attended, starred }, now).map((step) => `${step.key}:${step.state}`);
+    // Trước giờ học: chỉ bước Lên lịch đã xong.
+    expect(states("07:00", false, false)).toEqual(["scheduled:done", "attendance:pending", "live:pending", "stars:pending", "finished:pending"]);
+    // Trong giờ học, chưa điểm danh: Điểm danh và Đang học là các bước đang chờ; Chấm sao không bắt buộc nên không chờ.
+    expect(states("08:30", false, false)).toEqual(["scheduled:done", "attendance:current", "live:current", "stars:pending", "finished:pending"]);
+    expect(states("08:30", true, true)).toEqual(["scheduled:done", "attendance:done", "live:current", "stars:done", "finished:pending"]);
+    // Hết giờ mà chưa điểm danh: buổi chưa hoàn tất.
+    expect(states("10:00", false, false)).toEqual(["scheduled:done", "attendance:current", "live:done", "stars:pending", "finished:current"]);
+    expect(states("10:00", true, false)).toEqual(["scheduled:done", "attendance:done", "live:done", "stars:pending", "finished:done"]);
+    // Điểm danh trước giờ học (mở sớm) vẫn tính là đã xong.
+    expect(states("07:00", true, false)[1]).toBe("attendance:done");
+  });
+
+  it("các bước ghi giờ thật: giờ bắt đầu, giờ kết thúc và mốc lấy từ dữ liệu; bước chưa xảy ra không có giờ", () => {
+    const timeline = { scheduledAt: "12/01/2026 09:00", attendanceAt: "21/01/2026 08:05", starsAt: "21/01/2026 08:40" };
+    const at = (now: string, attended: boolean, starred: boolean) =>
+      sessionSteps({ startTime: "08:00", endTime: "09:30", cancelled: false, attended, starred }, now, timeline).map((step) => step.at);
+    expect(at("07:00", false, false)).toEqual(["12/01/2026 09:00", null, null, null, null]);
+    expect(at("08:50", true, true)).toEqual(["12/01/2026 09:00", "21/01/2026 08:05", "08:00", "21/01/2026 08:40", null]);
+    expect(at("10:00", true, false)).toEqual(["12/01/2026 09:00", "21/01/2026 08:05", "08:00", null, "09:30"]);
+    // Chưa tải mốc thời gian: bước đã xong vẫn đúng trạng thái, chỉ không có giờ.
+    expect(sessionSteps({ startTime: "08:00", endTime: "09:30", cancelled: false, attended: true, starred: false }, "08:10")[1]).toMatchObject({ state: "done", at: null });
+  });
+
+  it("buổi đã hủy: chỉ bước Lên lịch là xong, kể cả khi còn dữ liệu điểm danh cũ", () => {
+    const steps = sessionSteps({ startTime: "08:00", endTime: "09:30", cancelled: true, attended: true, starred: true }, "12:00");
+    expect(steps.map((step) => step.state)).toEqual(["done", "pending", "pending", "pending", "pending"]);
+    expect(steps.slice(1).every((step) => step.at === null)).toBe(true);
+  });
+
+  it("chênh lệch KPI so với kỳ trước: tăng, giảm, không đổi; thiếu dữ liệu một kỳ thì không so", () => {
+    expect(kpiDelta(12, 9)).toEqual({ direction: "up", diff: 3 });
+    expect(kpiDelta(76.3, 80)).toEqual({ direction: "down", diff: 3.7 });
+    expect(kpiDelta(5, 5)).toEqual({ direction: "flat", diff: 0 });
+    expect(kpiDelta(-4, 2)).toEqual({ direction: "down", diff: 6 });
+    expect(kpiDelta(null, 80)).toBeNull();
+    expect(kpiDelta(80, null)).toBeNull();
   });
 
   it("giờ hiện tại theo giờ Việt Nam, dạng HH:MM 24 giờ", () => {

@@ -1,10 +1,10 @@
-import { and, count, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, between, count, eq, gt, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { attendances, classes, enrollments, sessions, starLogs, students, teachers } from "@/db/schema";
 import type { CenterData } from "@/domain/center-3d";
 import { addDays, startOfWeek } from "@/lib/dates";
 import { formatTime, timeNow, todayIso } from "@/lib/format";
-import { type Actor, allowedClassIds, assertAdmin } from "../guard";
+import { type Actor, allowedClassIds, assertAdmin, can } from "../guard";
 import { listRooms } from "./catalog";
 import { type SessionRow, listSessions } from "./sessions";
 
@@ -92,8 +92,8 @@ export async function dashboardCharts(actor: Actor, now: Date = new Date()): Pro
 
 /**
  * Dữ liệu của giao diện 3D trung tâm ở trang Tổng quan: mọi phòng và các buổi hôm nay trong phạm vi của người dùng
- * (phạm vi do `listSessions` áp). Chỉ gồm tên lớp, người thực dạy, giờ, trạng thái hủy và sĩ số;
- * không có tên hay thông tin nào của học viên. `hrefOf`: trang mở buổi học, null nếu buổi không bấm vào được.
+ * (phạm vi do `listSessions` áp). Chỉ gồm tên lớp, người thực dạy, giờ, trạng thái hủy, sĩ số và số lượt đã điểm danh / đã ghi sao;
+ * không có tên hay thông tin nào của học viên (chi tiết học viên chỉ tải khi người dùng mở một buổi, xem `center-detail.ts`). `hrefOf`: trang mở buổi học, null nếu buổi không bấm vào được.
  */
 export async function centerToday(actor: Actor, hrefOf: (session: SessionRow) => string | null, now: Date = new Date()): Promise<CenterData> {
   const today = todayIso(now);
@@ -112,21 +112,102 @@ export async function centerToday(actor: Actor, hrefOf: (session: SessionRow) =>
           .where(and(inArray(enrollments.classId, classIds), eq(enrollments.status, "active")))
           .groupBy(enrollments.classId);
   const countOf = new Map(counts.map((c) => [c.classId, c.n]));
+  const seesStars = can(actor, "stars", "view");
   return {
     today,
     now: timeNow(now),
     rooms: roomRows.map((r) => ({ id: r.id, name: r.name, capacity: r.capacity })),
     sessions: sessionRows.map((s) => ({
       id: s.id,
+      classId: s.classId,
       roomId: s.roomId,
       className: s.className,
+      teacherId: s.substituteTeacherId ?? s.teacherId,
       teacherName: s.substituteShortName || s.substituteName || s.teacherShortName || s.teacherName || null,
       startTime: formatTime(s.startTime),
       endTime: formatTime(s.endTime),
       cancelled: s.status === "cancelled",
       timetableOnly: s.timetableOnly,
       studentCount: s.timetableOnly ? null : (countOf.get(s.classId) ?? 0),
+      attendanceCount: s.attendanceCount,
+      starLogCount: seesStars ? s.starLogCount : 0,
       href: hrefOf(s),
     })),
+  };
+}
+
+export type CenterKpis = {
+  /** Số học viên có buổi học hôm nay, và của cùng thứ tuần trước. */
+  studentsToday: { value: number; previous: number };
+  /** Tỉ lệ có đi học (%) trên các lượt đã điểm danh từ đầu tuần đến hôm nay, và của cùng khoảng ngày tuần trước; null = chưa có lượt nào. */
+  attendanceRate: { value: number | null; previous: number | null };
+  /** Tổng sao (thưởng trừ phạt) theo ngày học từ đầu tuần đến hôm nay, và của cùng khoảng ngày tuần trước. */
+  starsWeek: { value: number; previous: number };
+};
+
+/**
+ * Ba số liệu chính của dashboard kèm số của kỳ trước để so sánh. Admin và phạm vi "Tất cả lớp": toàn trung tâm;
+ * phạm vi "lớp của mình": chỉ các lớp trong phạm vi (cùng cách lọc với `dashboardCharts`). Chỉ là số đếm, không có dữ liệu học viên.
+ */
+export async function centerKpis(actor: Actor, now: Date = new Date()): Promise<CenterKpis> {
+  const allowed = await allowedClassIds(actor);
+  if (allowed && allowed.length === 0) {
+    return { studentsToday: { value: 0, previous: 0 }, attendanceRate: { value: null, previous: null }, starsWeek: { value: 0, previous: 0 } };
+  }
+  const inScope = allowed ? inArray(sessions.classId, allowed) : undefined;
+  const today = todayIso(now);
+  const weekStart = startOfWeek(today);
+
+  // Học viên có ghi danh hiệu lực tại ngày học ở một lớp có buổi chưa hủy trong ngày đó (mỗi em tính một lần).
+  const studentsOn = async (date: string) => {
+    const [row] = await db
+      .select({ n: sql<number>`count(distinct ${enrollments.studentId})::int` })
+      .from(sessions)
+      .innerJoin(classes, eq(classes.id, sessions.classId))
+      .innerJoin(enrollments, eq(enrollments.classId, sessions.classId))
+      .where(
+        and(
+          eq(sessions.date, date),
+          ne(sessions.status, "cancelled"),
+          eq(classes.timetableOnly, false),
+          lte(enrollments.joinedAt, date),
+          or(isNull(enrollments.leftAt), gt(enrollments.leftAt, date)),
+          inScope,
+        ),
+      );
+    return row?.n ?? 0;
+  };
+  const rateBetween = async (from: string, to: string) => {
+    const [row] = await db
+      .select({
+        attended: sql<number>`count(*) filter (where ${attendances.status} in ('present', 'late', 'left_early'))::int`,
+        total: sql<number>`count(*)::int`,
+      })
+      .from(attendances)
+      .innerJoin(sessions, eq(sessions.id, attendances.sessionId))
+      .where(and(between(sessions.date, from, to), eq(sessions.status, "done"), inScope));
+    return !row || row.total === 0 ? null : Math.round((row.attended / row.total) * 1000) / 10;
+  };
+  const starsBetween = async (from: string, to: string) => {
+    const [row] = await db
+      .select({ stars: sql<number>`coalesce(sum(${starLogs.stars}), 0)::int` })
+      .from(starLogs)
+      .innerJoin(sessions, eq(sessions.id, starLogs.sessionId))
+      .where(and(between(sessions.date, from, to), inScope));
+    return row?.stars ?? 0;
+  };
+
+  const [studentsNow, studentsBefore, rateNow, rateBefore, starsNow, starsBefore] = await Promise.all([
+    studentsOn(today),
+    studentsOn(addDays(today, -7)),
+    rateBetween(weekStart, today),
+    rateBetween(addDays(weekStart, -7), addDays(today, -7)),
+    starsBetween(weekStart, today),
+    starsBetween(addDays(weekStart, -7), addDays(today, -7)),
+  ]);
+  return {
+    studentsToday: { value: studentsNow, previous: studentsBefore },
+    attendanceRate: { value: rateNow, previous: rateBefore },
+    starsWeek: { value: starsNow, previous: starsBefore },
   };
 }

@@ -6,9 +6,11 @@ export type CenterRoom = { id: string; name: string; capacity: number };
 /** Một buổi hôm nay gửi xuống trình duyệt: không có tên hay thông tin nào của học viên. */
 export type CenterSession = {
   id: string;
+  classId: string;
   roomId: string | null;
   className: string;
   /** Người thực dạy (giáo viên dạy thay nếu có). */
+  teacherId: string | null;
   teacherName: string | null;
   /** "HH:MM" */
   startTime: string;
@@ -18,6 +20,10 @@ export type CenterSession = {
   timetableOnly: boolean;
   /** Số học viên đang ghi danh của lớp; null khi lớp không theo dõi học viên. */
   studentCount: number | null;
+  /** Số lượt điểm danh đã ghi của buổi (0 = chưa điểm danh). */
+  attendanceCount: number;
+  /** Số lần ghi sao của buổi; luôn 0 với người không có quyền xem Sao. */
+  starLogCount: number;
   /** Trang mở buổi học; null khi buổi không bấm vào được. */
   href: string | null;
 };
@@ -185,4 +191,56 @@ export function dayProgress(sessions: CenterSession[], now: string): DayProgress
     cancelled: sessions.length - held.length,
     percent: held.length === 0 ? 0 : Math.round((passed / held.length) * 100),
   };
+}
+
+// ---------- Các bước của một buổi học và chênh lệch KPI ----------
+
+export type SessionStepKey = "scheduled" | "attendance" | "live" | "stars" | "finished";
+export type SessionStepState = "done" | "current" | "pending";
+export type SessionStep = {
+  key: SessionStepKey;
+  label: string;
+  state: SessionStepState;
+  /** Thời điểm của bước (đã định dạng để hiển thị); null khi bước chưa xảy ra hoặc không rõ. */
+  at: string | null;
+};
+
+/** Mốc thời gian thật của buổi, đã định dạng để hiển thị; null = chưa có. */
+export type SessionTimeline = { scheduledAt: string | null; attendanceAt: string | null; starsAt: string | null };
+
+/**
+ * Năm bước của một buổi học hôm nay lúc `now` ("HH:MM"): Lên lịch → Điểm danh → Đang học → Chấm sao → Hoàn tất.
+ * - Lên lịch: luôn xong (buổi đã có trên thời khóa biểu).
+ * - Điểm danh: xong khi đã ghi điểm danh; tới giờ học mà chưa ghi thì là bước đang chờ làm.
+ * - Đang học: đang diễn ra trong giờ học, xong khi hết giờ.
+ * - Chấm sao: xong khi đã có lần ghi sao (bước không bắt buộc nên không bao giờ là bước đang chờ).
+ * - Hoàn tất: xong khi hết giờ và đã điểm danh; hết giờ mà chưa điểm danh thì còn chờ.
+ * Buổi đã hủy: chỉ bước Lên lịch là xong.
+ */
+export function sessionSteps(
+  session: Pick<CenterSession, "startTime" | "endTime" | "cancelled"> & { attended: boolean; starred: boolean },
+  now: string,
+  timeline?: SessionTimeline | null,
+): SessionStep[] {
+  const started = !session.cancelled && session.startTime <= now;
+  const ended = !session.cancelled && session.endTime <= now;
+  const attended = !session.cancelled && session.attended;
+  const starred = !session.cancelled && session.starred;
+  const state = (done: boolean, current: boolean): SessionStepState => (done ? "done" : current ? "current" : "pending");
+  return [
+    { key: "scheduled", label: "Lên lịch", state: "done", at: timeline?.scheduledAt ?? null },
+    { key: "attendance", label: "Điểm danh", state: state(attended, started), at: attended ? (timeline?.attendanceAt ?? null) : null },
+    { key: "live", label: "Đang học", state: state(ended, started), at: started ? session.startTime : null },
+    { key: "stars", label: "Chấm sao", state: state(starred, false), at: starred ? (timeline?.starsAt ?? null) : null },
+    { key: "finished", label: "Hoàn tất", state: state(ended && attended, ended), at: ended ? session.endTime : null },
+  ];
+}
+
+export type KpiDelta = { direction: "up" | "down" | "flat"; /** Mức chênh so với kỳ trước, luôn không âm, làm tròn một chữ số thập phân. */ diff: number };
+
+/** Chênh lệch của một số liệu so với kỳ trước; null khi một trong hai kỳ không có dữ liệu. */
+export function kpiDelta(current: number | null, previous: number | null): KpiDelta | null {
+  if (current === null || previous === null) return null;
+  const diff = Math.round((current - previous) * 10) / 10;
+  return { direction: diff > 0 ? "up" : diff < 0 ? "down" : "flat", diff: Math.abs(diff) };
 }

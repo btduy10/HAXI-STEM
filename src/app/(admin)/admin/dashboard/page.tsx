@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { QuickStats, kpiCards } from "@/components/center-3d/overview";
 import { Stage } from "@/components/center-3d/stage";
 import { DashboardCharts } from "@/components/dashboard-charts";
 import { formatDate, formatTime } from "@/lib/format";
 import { listOverdueSessions } from "@/server/services/attendance";
-import { adminOverview, centerToday, dashboardCharts } from "@/server/services/dashboard";
+import { adminOverview, centerKpis, centerToday, dashboardCharts } from "@/server/services/dashboard";
 import { requirePageUser, roleLabelOf } from "@/server/session";
 
 export const metadata: Metadata = { title: "Tổng quan" };
@@ -11,11 +12,13 @@ export const metadata: Metadata = { title: "Tổng quan" };
 /** Số buổi quá hạn gửi xuống trình duyệt để liệt kê; phần còn lại xem ở trang Điểm danh. */
 const OVERDUE_SHOWN = 8;
 
-// Tổng quan kiểu dashboard 3D isometric. Chỉ đọc dữ liệu qua các service sẵn có (đã kiểm tra quyền); không có thao tác ghi.
+// Tổng quan kiểu dashboard 3D isometric. Dữ liệu của trang chỉ đọc qua các service đã kiểm tra quyền; chi tiết học viên chỉ tải
+// khi người dùng mở một buổi; điểm danh và ghi sao trên trang dùng đúng các action của trang Điểm danh và trang Ghi sao.
 export default async function AdminDashboardPage() {
   const user = await requirePageUser("admin");
-  const [overview, overdue, charts, center, role] = await Promise.all([
+  const [overview, kpis, overdue, charts, center, role] = await Promise.all([
     adminOverview(user.actor),
+    centerKpis(user.actor),
     listOverdueSessions(user.actor),
     dashboardCharts(user.actor),
     centerToday(user.actor, (s) => `/admin/sessions/${s.id}`),
@@ -26,9 +29,7 @@ export default async function AdminDashboardPage() {
       data={{
         center,
         kpis: [
-          { label: "Học viên đang học", value: overview.activeStudents, href: "/admin/students" },
-          { label: "Giáo viên đang dạy", value: overview.activeTeachers, href: "/admin/teachers" },
-          { label: "Lớp đang mở", value: overview.openClasses, href: "/admin/classes" },
+          ...kpiCards(kpis, { students: "/admin/timetable", attendance: "/admin/attendance", stars: "/admin/stars" }),
           { label: "Buổi quá hạn chưa điểm danh", value: overdue.length, href: "/admin/attendance", alert: true },
         ],
         overdue: overdue.slice(0, OVERDUE_SHOWN).map((s) => ({
@@ -40,17 +41,18 @@ export default async function AdminDashboardPage() {
         })),
         overdueTotal: overdue.length,
         overdueHref: "/admin/attendance",
-        classes: charts.classRates.map((c) => ({
-          id: c.classId,
-          title: c.name,
-          detail: `Chuyên cần ${c.rate}% · ${c.total} lượt điểm danh`,
-          href: `/admin/classes/${c.classId}`,
-        })),
-        classesLabel: "Lớp",
-        classesEmpty: "Chưa có lớp đang mở nào được điểm danh.",
         user: { name: user.name, role },
+        perms: { attendance: true, stars: true, students: true },
+        studentBase: "/admin/students",
       }}
     >
+      <QuickStats
+        items={[
+          { label: "học viên đang học", value: overview.activeStudents, href: "/admin/students" },
+          { label: "giáo viên đang dạy", value: overview.activeTeachers, href: "/admin/teachers" },
+          { label: "lớp đang mở", value: overview.openClasses, href: "/admin/classes" },
+        ]}
+      />
       <DashboardCharts data={charts} scopeLabel="toàn trung tâm" />
     </Stage>
   );

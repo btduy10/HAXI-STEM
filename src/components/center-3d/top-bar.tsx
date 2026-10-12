@@ -8,7 +8,8 @@ import { authClient } from "@/lib/auth-client";
 import { hardNavigate } from "@/lib/navigate";
 import { cn } from "@/lib/utils";
 
-export type SearchResult = { key: string; roomId: string; title: string; detail: string };
+/** Một kết quả tìm kiếm; `key` cho biết loại và mã của đối tượng ("room|…", "session|…", "teacher|…", "student|…"). */
+export type SearchResult = { key: string; title: string; detail: string };
 export type OverdueItem = { id: string; title: string; detail: string; href: string; locked: boolean };
 
 /** Nút mở một khung nhỏ bên dưới (thông báo, tài khoản). Đóng khi bấm ra ngoài, nhấn Escape hoặc chọn một mục bên trong. */
@@ -71,7 +72,8 @@ const rowClass = "flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 text
 
 /**
  * Thanh trên của dashboard: logo và tên cơ sở, ô tìm kiếm (phím tắt "/"), chip "Live" kèm đồng hồ, chuông báo buổi quá hạn
- * chưa điểm danh, và tài khoản đang đăng nhập. Tìm kiếm chỉ lọc dữ liệu hôm nay đã có sẵn trên trang.
+ * chưa điểm danh, và tài khoản đang đăng nhập. Phòng, lớp, giáo viên lọc ngay trên dữ liệu hôm nay của trang; học viên do
+ * trang gọi máy chủ tìm (theo quyền) rồi đưa vào `results`. Chip "Live" nháy mỗi khi `pulse` đổi (dữ liệu mới về).
  */
 export function TopBar({
   className,
@@ -80,7 +82,13 @@ export function TopBar({
   query,
   onQuery,
   results,
+  searching,
+  searchError,
+  emptyText,
+  searchLabel,
+  searchPlaceholder,
   onPick,
+  pulse,
   overdue,
   overdueTotal,
   overdueHref,
@@ -92,7 +100,16 @@ export function TopBar({
   query: string;
   onQuery: (value: string) => void;
   results: SearchResult[];
+  /** Đang tìm học viên ở máy chủ, hoặc lỗi của lần tìm đó. */
+  searching: boolean;
+  searchError: string | null;
+  /** Dòng ghi khi không có kết quả nào. */
+  emptyText: string;
+  searchLabel: string;
+  searchPlaceholder: string;
   onPick: (result: SearchResult) => void;
+  /** Dấu của dữ liệu trang; đổi là dữ liệu mới vừa về. */
+  pulse: string;
   /** Vài buổi quá hạn mới nhất để liệt kê dưới chuông. */
   overdue: OverdueItem[];
   overdueTotal: number;
@@ -113,6 +130,24 @@ export function TopBar({
     document.addEventListener("keydown", focusSearch);
     return () => document.removeEventListener("keydown", focusSearch);
   }, []);
+  // Dữ liệu mới về: chip "Live" nháy một nhịp (tắt khi người dùng bật giảm chuyển động).
+  const chip = useRef<HTMLParagraphElement>(null);
+  const seen = useRef(pulse);
+  useEffect(() => {
+    if (seen.current === pulse) return;
+    seen.current = pulse;
+    const element = chip.current;
+    if (!element) return;
+    element.dataset.updates = String(Number(element.dataset.updates ?? "0") + 1);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    element.animate(
+      [
+        { boxShadow: "0 0 0 0 color-mix(in srgb, var(--primary) 55%, transparent)", backgroundColor: "var(--brand-gold-soft)" },
+        { boxShadow: "0 0 0 10px transparent", backgroundColor: "var(--primary-soft)" },
+      ],
+      { duration: 900, iterations: 2, easing: "ease-out" },
+    );
+  }, [pulse]);
   const initial = user.name.trim().charAt(0).toUpperCase() || "?";
   async function signOut() {
     await authClient.signOut();
@@ -146,8 +181,8 @@ export function TopBar({
               event.currentTarget.blur();
             }
           }}
-          aria-label="Tìm phòng, lớp hoặc giáo viên hôm nay"
-          placeholder="Tìm phòng, lớp, giáo viên…"
+          aria-label={searchLabel}
+          placeholder={searchPlaceholder}
           className="h-10 w-full rounded-full border bg-background pr-10 pl-9 text-sm outline-none placeholder:text-ink-soft focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-ring/40"
         />
         <kbd className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 rounded-md border bg-card px-1.5 text-xs text-ink-soft" aria-hidden>
@@ -155,24 +190,31 @@ export function TopBar({
         </kbd>
         {query.trim() !== "" && (
           <ul aria-label="Kết quả tìm kiếm" className="panel absolute top-full right-0 left-0 z-40 mt-2 grid max-h-72 gap-1 overflow-y-auto p-2 text-sm">
-            {results.length === 0 ? (
-              <li className="px-2.5 py-2 text-ink-soft">Không có phòng, lớp hay giáo viên nào khớp trong hôm nay.</li>
+            {results.map((result) => (
+              <li key={result.key}>
+                <button type="button" onClick={() => onPick(result)} className={cn(rowClass, "w-full flex-col items-start gap-0")}>
+                  <span className="font-medium">{result.title}</span>
+                  <span className="text-xs text-ink-soft">{result.detail}</span>
+                </button>
+              </li>
+            ))}
+            {searching ? (
+              <li role="status" className="px-2.5 py-2 text-ink-soft">
+                Đang tìm học viên…
+              </li>
+            ) : searchError ? (
+              <li role="alert" className="px-2.5 py-2 text-danger">
+                {searchError}
+              </li>
             ) : (
-              results.map((result) => (
-                <li key={result.key}>
-                  <button type="button" onClick={() => onPick(result)} className={cn(rowClass, "w-full flex-col items-start gap-0")}>
-                    <span className="font-medium">{result.title}</span>
-                    <span className="text-xs text-ink-soft">{result.detail}</span>
-                  </button>
-                </li>
-              ))
+              results.length === 0 && <li className="px-2.5 py-2 text-ink-soft">{emptyText}</li>
             )}
           </ul>
         )}
       </div>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        <p className="flex h-9 items-center gap-2 rounded-full bg-primary-soft px-3 text-sm font-medium text-primary-strong" aria-label={`Trực tiếp, bây giờ ${now}`}>
+        <p ref={chip} data-live-chip className="flex h-9 items-center gap-2 rounded-full bg-primary-soft px-3 text-sm font-medium text-primary-strong" aria-label={`Trực tiếp, bây giờ ${now}`}>
           <span aria-hidden className="relative flex size-2">
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-60 motion-reduce:hidden" />
             <span className="relative inline-flex size-2 rounded-full bg-primary" />

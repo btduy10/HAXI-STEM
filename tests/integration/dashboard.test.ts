@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/db";
-import { attendances, classes, rooms, sessions, starLogs } from "@/db/schema";
-import { centerToday, dashboardCharts } from "@/server/services/dashboard";
+import { attendances, classes, enrollments, rooms, sessions, starLogs } from "@/db/schema";
+import { DEFAULT_PERMISSIONS } from "@/lib/permissions";
+import { centerKpis, centerToday, dashboardCharts } from "@/server/services/dashboard";
 import { type Fixture, resetDb, seedFixture } from "./helpers";
 
 let f: Fixture;
@@ -72,6 +73,58 @@ describe("số liệu biểu đồ trang Tổng quan", () => {
   });
 });
 
+describe("thẻ KPI của dashboard: số hôm nay / tuần này kèm số kỳ trước", () => {
+  // Thêm buổi hôm nay (21/01): lớp A học, lớp B bị hủy; cùng thứ tuần trước (14/01): cả hai lớp học.
+  const seedDays = () =>
+    db.insert(sessions).values([
+      { classId: f.classA.id, date: "2026-01-21", startTime: "08:00", endTime: "09:30" },
+      { classId: f.classB.id, date: "2026-01-21", startTime: "14:00", endTime: "15:30", status: "cancelled" },
+      { classId: f.classA.id, date: "2026-01-14", startTime: "08:00", endTime: "09:30" },
+      { classId: f.classB.id, date: "2026-01-14", startTime: "14:00", endTime: "15:30" },
+    ]);
+
+  it("Admin: học viên hôm nay, tỉ lệ điểm danh và sao từ đầu tuần, so với cùng khoảng ngày tuần trước", async () => {
+    await seedDays();
+    expect(await centerKpis(f.admin, now)).toEqual({
+      // Hôm nay chỉ lớp A học (buổi của lớp B đã hủy): 2 em; Thứ Tư tuần trước cả hai lớp: 4 em.
+      studentsToday: { value: 2, previous: 4 },
+      // Tuần này (19–21/01): trễ, phép, có mặt, có mặt → 3/4; tuần trước (12–14/01): có mặt, vắng → 1/2.
+      attendanceRate: { value: 75, previous: 50 },
+      starsWeek: { value: 6, previous: 25 },
+    });
+  });
+
+  it("học viên đã rời lớp trước ngày học không được tính; lớp chỉ hiển thị trên Thời khóa biểu không tính", async () => {
+    await seedDays();
+    await db.update(enrollments).set({ leftAt: "2026-01-16", status: "left" }).where(eq(enrollments.studentId, f.students[0]!.id));
+    // A1 rời lớp ngày 16/01: không còn tính hôm nay, vẫn tính ở Thứ Tư tuần trước.
+    expect((await centerKpis(f.admin, now)).studentsToday).toEqual({ value: 1, previous: 4 });
+    await db.update(classes).set({ timetableOnly: true }).where(eq(classes.id, f.classA.id));
+    expect((await centerKpis(f.admin, now)).studentsToday).toEqual({ value: 0, previous: 2 });
+  });
+
+  it("giáo viên chỉ có số của lớp mình; vai trò xem mọi lớp có số toàn trung tâm; tài khoản không gắn giáo viên nhận số rỗng", async () => {
+    await seedDays();
+    expect(await centerKpis(f.actorA, now)).toEqual({
+      studentsToday: { value: 2, previous: 2 },
+      attendanceRate: { value: 50, previous: 50 },
+      starsWeek: { value: 1, previous: 25 },
+    });
+    expect(await centerKpis(f.actorB, now)).toEqual({
+      studentsToday: { value: 0, previous: 2 },
+      attendanceRate: { value: 100, previous: null },
+      starsWeek: { value: 5, previous: 0 },
+    });
+    const duty = { userId: f.actorA.userId, role: "duty_teacher", teacherId: null, perms: DEFAULT_PERMISSIONS.duty_teacher };
+    expect((await centerKpis(duty, now)).studentsToday).toEqual({ value: 2, previous: 4 });
+    expect(await centerKpis({ ...f.actorA, teacherId: null }, now)).toEqual({
+      studentsToday: { value: 0, previous: 0 },
+      attendanceRate: { value: null, previous: null },
+      starsWeek: { value: 0, previous: 0 },
+    });
+  });
+});
+
 describe("giao diện 3D trung tâm ở trang Tổng quan", () => {
   // Hôm nay (21/01): lớp A có buổi sáng, lớp B có buổi chiều (thầy B dạy, thầy A dạy thay) và một buổi tối đã hủy, chưa xếp phòng.
   const seedToday = async () => {
@@ -99,10 +152,10 @@ describe("giao diện 3D trung tâm ở trang Tổng quan", () => {
       { id: lab2.id, name: "Lab 2", capacity: 6 },
     ]);
     expect(data.sessions).toEqual([
-      { id: morning.id, roomId: f.room.id, className: "Lớp A", teacherName: "Giáo viên A", startTime: "08:00", endTime: "09:30", cancelled: false, timetableOnly: false, studentCount: 2, href: `/x/${morning.id}` },
+      { id: morning.id, classId: f.classA.id, roomId: f.room.id, className: "Lớp A", teacherId: f.teacherA.id, teacherName: "Giáo viên A", startTime: "08:00", endTime: "09:30", cancelled: false, timetableOnly: false, studentCount: 2, attendanceCount: 0, starLogCount: 0, href: `/x/${morning.id}` },
       // Người thực dạy là giáo viên dạy thay.
-      { id: afternoon.id, roomId: lab2.id, className: "Lớp B", teacherName: "Giáo viên A", startTime: "14:00", endTime: "15:30", cancelled: false, timetableOnly: false, studentCount: 2, href: `/x/${afternoon.id}` },
-      { id: evening.id, roomId: null, className: "Lớp B", teacherName: "Giáo viên B", startTime: "18:00", endTime: "19:30", cancelled: true, timetableOnly: false, studentCount: 2, href: `/x/${evening.id}` },
+      { id: afternoon.id, classId: f.classB.id, roomId: lab2.id, className: "Lớp B", teacherId: f.teacherA.id, teacherName: "Giáo viên A", startTime: "14:00", endTime: "15:30", cancelled: false, timetableOnly: false, studentCount: 2, attendanceCount: 0, starLogCount: 0, href: `/x/${afternoon.id}` },
+      { id: evening.id, classId: f.classB.id, roomId: null, className: "Lớp B", teacherId: f.teacherB.id, teacherName: "Giáo viên B", startTime: "18:00", endTime: "19:30", cancelled: true, timetableOnly: false, studentCount: 2, attendanceCount: 0, starLogCount: 0, href: `/x/${evening.id}` },
     ]);
     // Không có tên, mã hay thông tin nào của học viên được gửi xuống trình duyệt.
     const sent = JSON.stringify(data);
@@ -123,6 +176,13 @@ describe("giao diện 3D trung tâm ở trang Tổng quan", () => {
     expect((await centerToday(f.actorB, hrefOf, now)).sessions.map((s) => s.className)).toEqual(["Lớp B", "Lớp B"]);
     // Tài khoản giáo viên không gắn giáo viên: không có buổi nào.
     expect((await centerToday({ ...f.actorA, teacherId: null }, hrefOf, now)).sessions).toEqual([]);
+
+    // Số lượt đã điểm danh và số lần ghi sao của buổi đi kèm; người không có quyền xem Sao luôn nhận 0 lần ghi sao.
+    await db.insert(attendances).values({ sessionId: morning.id, studentId: f.students[0]!.id, status: "present" });
+    await db.insert(starLogs).values({ sessionId: morning.id, studentId: f.students[0]!.id, stars: 2 });
+    expect((await centerToday(f.actorA, hrefOf, now)).sessions[0]).toMatchObject({ attendanceCount: 1, starLogCount: 1 });
+    const duty = { userId: f.actorA.userId, role: "duty_teacher", teacherId: null, perms: DEFAULT_PERMISSIONS.duty_teacher };
+    expect((await centerToday(duty, hrefOf, now)).sessions[0]).toMatchObject({ attendanceCount: 1, starLogCount: 0 });
 
     await db.update(classes).set({ timetableOnly: true }).where(eq(classes.id, f.classA.id));
     const [lent] = (await centerToday(f.admin, () => null, now)).sessions;

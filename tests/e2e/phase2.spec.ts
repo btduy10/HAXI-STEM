@@ -30,16 +30,19 @@ test.beforeAll(async () => {
 test("GV điểm danh trên điện thoại 360px: mặc định có mặt, sửa một em, lưu", async ({ page }) => {
   await login(page, "gv.lan", NEW_PASSWORD);
   await expect(page).toHaveURL(/\/teacher\/dashboard$/);
-  // Tổng quan kiểu dashboard: KPI, phòng học hôm nay, danh sách có tab (buổi hôm nay, quá hạn, lớp). Điện thoại không dựng cảnh 3D.
+  // Tổng quan kiểu dashboard: KPI, phòng học hôm nay, danh sách có tab (lớp, giáo viên, học viên). Điện thoại không dựng cảnh 3D.
   await expect(page.getByRole("region", { name: "Phòng học hôm nay" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /^Hôm nay/ })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("tab", { name: /^Quá hạn/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Lớp/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /^Giáo viên/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^Học viên/ })).toBeVisible();
   await expect(page.getByRole("list", { name: "Số liệu chính" }).filter({ visible: true })).toContainText("Buổi quá hạn chưa điểm danh");
   await expect(page.locator("canvas")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
   await page.screenshot({ path: "test-results/shots/teacher-dashboard-360.png", fullPage: true });
 
-  await page.getByRole("link", { name: /07:00–07:45/ }).click();
+  // Bấm buổi hôm nay ở danh sách: thẻ chi tiết hiện lớp đó; "Mở buổi học" dẫn tới trang điểm danh của buổi.
+  await page.getByRole("tabpanel").getByRole("button", { name: /07:00–07:45/ }).click();
+  await page.locator("[data-detail-panel]").getByRole("link", { name: "Mở buổi học" }).click();
   await expect(page).toHaveURL(new RegExp(`/teacher/sessions/${ownSessionId}/attendance$`));
   await expect(page.getByRole("radio", { name: "Có mặt", checked: true })).toHaveCount(8);
   await expectNoHorizontalScroll(page);

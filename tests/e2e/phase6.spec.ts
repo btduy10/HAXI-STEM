@@ -69,34 +69,43 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
     Math.max(0, ...document.getAnimations().map((animation) => Number(animation.effect?.getComputedTiming().endTime ?? 0))),
   );
   expect(longest, "animation dài nhất khi bật giảm chuyển động (ms)").toBeLessThan(1);
-  const kpi = page.getByRole("link", { name: /Học viên đang học/ });
+  const kpi = page.locator('[data-kpi="Học viên hôm nay"] [data-kpi-value]').filter({ visible: true });
   const shown = await kpi.textContent();
-  expect(shown).toMatch(/Học viên đang học\s*[1-9]\d*$/);
+  expect(shown).toMatch(/^\d+$/);
+  // Các số chung của trung tâm nằm ở hàng phía trên biểu đồ, vẫn dẫn tới trang của chúng.
+  await expect(page.getByRole("link", { name: /^[1-9]\d*\s*học viên đang học$/ })).toHaveAttribute("href", "/admin/students");
   await page.waitForTimeout(900);
   expect(await kpi.textContent()).toBe(shown);
 
   expect(pageErrors).toEqual([]);
 });
 
-test("Tổng quan kiểu dashboard 3D: điện thoại không dựng cảnh; laptop có cảnh isometric với thanh trên, KPI, các thẻ nổi; tìm kiếm, nút camera, chọn phòng mở đúng buổi; giáo viên chỉ thấy buổi trong phạm vi", async ({ page, browser }) => {
-  test.setTimeout(240_000);
+test("Tổng quan kiểu dashboard 3D nối dữ liệu thật: điện thoại không dựng cảnh; laptop có cảnh isometric, KPI có so sánh, chọn phòng → thẻ lớp, học viên, giáo viên, các bước của buổi; tìm kiếm; điểm danh và ghi sao ngay trên trang; giáo viên chỉ thấy và làm được trong phạm vi lớp của mình", async ({ page, browser }) => {
+  test.setTimeout(360_000);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
 
-  // Một phòng riêng có buổi kéo dài cả ngày hôm nay (luôn "đang học" dù chạy lúc nào), do GV02 dạy, lớp có 1 học viên.
+  // Hai phòng riêng, mỗi phòng một buổi kéo dài cả ngày hôm nay (luôn "đang học" dù chạy lúc nào), mỗi lớp 1 học viên:
+  // "Lớp thử 3D" do GV02 dạy (không phải lớp của gv.lan), "Lớp của Lan 3D" do GV01 (gv.lan) dạy.
   const db = sql();
   const [base] = await db`select course_id from classes where code = 'RB-CB01'`;
-  const [room] = await db`insert into rooms (name, capacity) values ('Phòng 3D E2E', 8) returning id`;
-  const [cls] = await db`
-    insert into classes (code, name, course_id, default_room_id, start_date, end_date, max_size)
-    values ('3D-E2E', 'Lớp thử 3D', ${base!.course_id}, ${room!.id}, ${today}, ${today}, 8) returning id`;
-  const [student] = await db`select id from students where code = 'HV001'`;
-  await db`insert into enrollments (class_id, student_id, joined_at) values (${cls!.id}, ${student!.id}, ${today})`;
-  const [teacher] = await db`select id from teachers where code = 'GV02'`;
-  const [held] = await db`
-    insert into sessions (class_id, date, start_time, end_time, room_id, teacher_id)
-    values (${cls!.id}, ${today}, '00:00', '23:59', ${room!.id}, ${teacher!.id}) returning id`;
+  const seedClass = async (roomName: string, code: string, name: string, studentCode: string, teacherCode: string) => {
+    const [room] = await db`insert into rooms (name, capacity) values (${roomName}, 8) returning id`;
+    const [cls] = await db`
+      insert into classes (code, name, course_id, default_room_id, start_date, end_date, max_size)
+      values (${code}, ${name}, ${base!.course_id}, ${room!.id}, ${today}, ${today}, 8) returning id`;
+    const [student] = await db`select id, full_name from students where code = ${studentCode}`;
+    await db`insert into enrollments (class_id, student_id, joined_at) values (${cls!.id}, ${student!.id}, ${today})`;
+    // Tên giáo viên hiện trên dashboard là tên gọi ngắn nếu có.
+    const [teacher] = await db`select id, coalesce(nullif(short_name, ''), full_name) as full_name from teachers where code = ${teacherCode}`;
+    const [held] = await db`
+      insert into sessions (class_id, date, start_time, end_time, room_id, teacher_id)
+      values (${cls!.id}, ${today}, '00:00', '23:59', ${room!.id}, ${teacher!.id}) returning id`;
+    return { sessionId: held!.id as string, studentName: student!.full_name as string, teacherName: teacher!.full_name as string };
+  };
+  const other = await seedClass("Phòng 3D E2E", "3D-E2E", "Lớp thử 3D", "HV001", "GV02");
+  const mine = await seedClass("Phòng 3D Lan", "3D-E2E2", "Lớp của Lan 3D", "HV002", "GV01");
 
   try {
     const threeScripts: string[] = [];
@@ -106,23 +115,31 @@ test("Tổng quan kiểu dashboard 3D: điện thoại không dựng cảnh; lap
     await page.getByRole("button", { name: "Xác nhận" }).click();
     await expect(page).toHaveURL(/\/admin\/dashboard$/);
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    const detail = page.locator("[data-detail-panel]");
+    const lists = page.getByRole("tabpanel");
 
-    // Điện thoại 360px: một cột, không dựng cảnh, không tải thư viện 3D; số liệu và danh sách vẫn đủ.
-    await expect(page.getByRole("link", { name: /Học viên đang học/ })).toBeVisible();
-    const rooms = page.getByRole("region", { name: "Phòng học hôm nay" });
-    await expect(rooms.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "live");
-    await expect(page.getByRole("tab", { name: /^Hôm nay/ })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("tabpanel").locator('[data-session="Lớp thử 3D"]')).toContainText("Đang học");
+    // Điện thoại 360px: một cột, không dựng cảnh, không tải thư viện 3D; số liệu, danh sách và chi tiết vẫn đủ.
+    await expect(page.getByRole("link", { name: /học viên đang học/ })).toBeVisible();
+    await expect(detail.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "live");
+    await expect(page.getByRole("tab", { name: /^Lớp/ })).toHaveAttribute("aria-selected", "true");
+    await expect(lists.locator('[data-session="Lớp thử 3D"]')).toContainText("Đang học");
     await expect(page.locator("[data-day-percent]")).toHaveText(/^\d+%$/);
     await expect(page.getByRole("heading", { name: "Điểm danh 30 ngày qua" })).toBeVisible();
     await expect(page.locator("canvas")).toHaveCount(0);
     await expect(page.locator("[data-center-scene]")).toBeHidden();
+    // Trang mới mở không có tên hay mã học viên nào: chi tiết chỉ tải khi mở một buổi.
+    await expect(page.getByText("HV001")).toHaveCount(0);
+    await expect(page.getByText(other.studentName)).toHaveCount(0);
     expect(await overflow()).toBeLessThanOrEqual(0);
     await page.waitForLoadState("networkidle");
     expect(threeScripts, "điện thoại không tải thư viện 3D").toEqual([]);
-    // Buổi hôm nay mở đúng trang buổi học.
-    await page.getByRole("tabpanel").getByRole("link", { name: /Lớp thử 3D/ }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin/sessions/${held!.id}$`));
+    // Bấm một lớp ở danh sách: thẻ chi tiết hiện lớp đó kèm học viên; từ đó mở đúng trang buổi học.
+    await lists.locator('[data-session="Lớp thử 3D"] button').click();
+    await expect(detail.locator('[data-class-detail="Lớp thử 3D"]')).toBeVisible();
+    await expect(detail.locator(`[data-student="${other.studentName}"]`)).toContainText("HV001");
+    expect(await overflow()).toBeLessThanOrEqual(0);
+    await detail.getByRole("link", { name: "Mở buổi học" }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/sessions/${other.sessionId}$`));
 
     // Laptop 1366×768: cảnh 3D isometric làm nền, các thẻ nổi lên trên.
     await page.setViewportSize({ width: 1366, height: 768 });
@@ -146,31 +163,43 @@ test("Tổng quan kiểu dashboard 3D: điện thoại không dựng cảnh; lap
     await page.keyboard.press("Escape");
     await expect(bar.getByRole("button", { name: "Đăng xuất" })).toHaveCount(0);
 
-    // KPI giữ các số và đường dẫn cũ.
-    for (const name of ["Học viên đang học", "Giáo viên đang dạy", "Lớp đang mở", "Buổi quá hạn chưa điểm danh"]) {
-      await expect(scene.getByRole("link", { name: new RegExp(name) })).toBeVisible();
+    // KPI: học viên hôm nay, tỉ lệ điểm danh, sao trong tuần (có so sánh kỳ trước) và buổi quá hạn.
+    for (const name of ["Học viên hôm nay", "Tỉ lệ điểm danh tuần này", "Sao đã trao trong tuần", "Buổi quá hạn chưa điểm danh"]) {
+      await expect(scene.locator(`[data-kpi="${name}"]`)).toBeVisible();
     }
+    await expect(scene.locator('[data-kpi="Học viên hôm nay"] [data-kpi-delta]')).toContainText(/so với cùng thứ tuần trước/);
+    const starsKpi = scene.locator('[data-kpi="Sao đã trao trong tuần"] [data-kpi-value]');
+    const starsBefore = Number(await starsKpi.textContent());
 
-    // Phím "/" vào ô tìm kiếm; gõ không dấu vẫn ra; Enter chọn phòng của buổi tìm thấy.
+    // Phím "/" vào ô tìm kiếm; gõ không dấu vẫn ra; Enter chọn lớp tìm thấy: thẻ chi tiết đổi sang lớp đó.
     await page.keyboard.press("/");
     const search = bar.getByRole("searchbox");
     await expect(search).toBeFocused();
     await search.fill("thu 3d");
     await expect(bar.getByRole("list", { name: "Kết quả tìm kiếm" })).toContainText("Lớp thử 3D");
     await page.keyboard.press("Enter");
-    await expect(rooms.getByRole("heading", { name: "Phòng 3D E2E" })).toBeVisible();
-    await expect(rooms).toContainText("Sức chứa 8 chỗ · 1 buổi hôm nay");
-    await expect(rooms).toContainText("Sĩ số 1/8");
-    await expect(rooms).toContainText("GV: ");
-    await expect(rooms.getByRole("link", { name: "Mở buổi học" })).toHaveAttribute("href", `/admin/sessions/${held!.id}`);
-    // Không có tên hay mã học viên nào trong trang.
-    await expect(page.getByText("HV001")).toHaveCount(0);
+    await expect(detail.getByRole("heading", { name: "Phòng 3D E2E" })).toBeVisible();
+    await expect(detail).toContainText("Sức chứa 8 chỗ · 1 buổi hôm nay");
+    const card = detail.locator('[data-class-detail="Lớp thử 3D"]');
+    await expect(card).toContainText("1/8");
+    await expect(card).toContainText(other.teacherName);
+    await expect(card).toContainText("Chưa điểm danh");
+    await expect(card.getByRole("link", { name: "Mở buổi học" })).toHaveAttribute("href", `/admin/sessions/${other.sessionId}`);
+    await expect(detail.locator(`[data-student="${other.studentName}"]`)).toContainText("HV001 · Chưa điểm danh");
     // Nhãn của phòng trong cảnh là nút thật: cùng trạng thái, đang được chọn.
     const label = scene.getByRole("button", { name: "Phòng 3D E2E: Đang học, Lớp thử 3D" });
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute("aria-pressed", "true");
+    // Thẻ tiến trình đổi sang năm bước của buổi đang chọn.
+    const steps = page.locator("[data-session-steps] [data-step]");
+    await expect(steps).toHaveCount(5);
+    await expect(page.locator('[data-step="scheduled"]')).toHaveAttribute("data-step-state", "done");
+    await expect(page.locator('[data-step="attendance"]')).toHaveAttribute("data-step-state", "current");
+    await expect(page.locator('[data-step="live"]')).toHaveAttribute("data-step-state", "current");
+    await expect(page.locator('[data-step="finished"]')).toHaveAttribute("data-step-state", "pending");
 
     // Cột nút điều khiển góc nhìn: mỗi nút làm cảnh đổi (nhãn của phòng dời chỗ hoặc đổi cỡ).
+    await page.waitForTimeout(1300);
     const placed = () => label.evaluate((element) => (element as HTMLElement).style.transform);
     for (const name of ["Phóng to", "Xoay 45°", "Thu nhỏ", "Về tòa nhà chính", "Đặt lại góc nhìn"]) {
       const before = await placed();
@@ -178,50 +207,153 @@ test("Tổng quan kiểu dashboard 3D: điện thoại không dựng cảnh; lap
       await expect.poll(placed, { message: `nút ${name} đổi góc nhìn` }).not.toBe(before);
       await page.waitForTimeout(700);
     }
-    await page.waitForTimeout(800);
-    await page.screenshot({ path: "test-results/shots/stage-1366.png" });
 
-    // Quay lại danh sách phòng; tab Quá hạn và tab Lớp đổi nội dung thẻ danh sách.
-    await rooms.getByRole("button", { name: "Tất cả phòng" }).click();
-    await expect(rooms.locator('[data-room="Phòng Lab 1"]')).toBeVisible();
-    await page.getByRole("tab", { name: /^Quá hạn/ }).click();
-    await expect(page.getByRole("tab", { name: /^Quá hạn/ })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("tabpanel").locator('[data-session="Lớp thử 3D"]')).toHaveCount(0);
+    // Bấm học viên: máy quay bay tới (nhãn phòng dời chỗ), hình người được đánh dấu kèm nhãn tên, thẻ đổi sang học viên.
+    const beforeFlight = await placed();
+    await detail.locator(`[data-student="${other.studentName}"] button`).click();
+    await expect(detail.getByRole("heading", { name: other.studentName })).toBeVisible();
+    await expect(detail.getByRole("heading", { name: "Lịch sử điểm danh" })).toBeVisible();
+    await expect(detail.locator("[data-student-total]")).toContainText("tổng sao");
+    await expect(detail.getByRole("link", { name: "Mở hồ sơ đầy đủ" })).toHaveAttribute("href", /^\/admin\/students\/[0-9a-f-]{36}$/);
+    await expect(scene.locator("[data-scene-marker]")).toHaveText(other.studentName);
+    await expect.poll(placed, { message: "chọn học viên thì máy quay bay tới" }).not.toBe(beforeFlight);
+    await page.waitForTimeout(1300);
+    await page.screenshot({ path: "test-results/shots/stage-1366.png" });
+    await detail.getByRole("button", { name: "Quay lại Lớp thử 3D" }).click();
+
+    // Bấm giáo viên: các lớp phụ trách trong tuần.
+    await card.getByRole("button", { name: other.teacherName }).click();
+    await expect(detail.getByRole("heading", { name: other.teacherName })).toBeVisible();
+    await expect(detail.locator('[data-teacher-class="Lớp thử 3D"]')).toContainText("Dạy chính");
+    await expect(scene.locator("[data-scene-marker]")).toHaveText(other.teacherName);
+    await detail.getByRole("button", { name: "Quay lại Lớp thử 3D" }).click();
+
+    // Tab Giáo viên và tab Học viên; bấm dòng nào thì thẻ chi tiết đổi theo.
+    await page.getByRole("tab", { name: /^Học viên/ }).click();
+    await expect(lists).toContainText(other.studentName);
+    await page.getByRole("tab", { name: /^Giáo viên/ }).click();
+    await lists.locator(`[data-teacher="${other.teacherName}"] button`).click();
+    await expect(detail.getByRole("heading", { name: other.teacherName })).toBeVisible();
     await page.getByRole("tab", { name: /^Lớp/ }).click();
-    await expect(page.getByRole("tabpanel")).toBeVisible();
-    await expect(page.getByRole("progressbar", { name: "Tiến trình các buổi học hôm nay" })).toBeVisible();
+    await lists.locator('[data-session="Lớp thử 3D"] button').click();
+    await expect(card).toBeVisible();
     expect(await overflow()).toBeLessThanOrEqual(0);
 
-    // Bấm phòng ở danh sách rồi mở buổi học.
-    await rooms.locator('[data-room="Phòng 3D E2E"]').click();
-    await rooms.getByRole("link", { name: "Mở buổi học" }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin/sessions/${held!.id}$`));
+    // Tìm học viên theo mã: máy chủ tìm theo quyền; chọn kết quả mở thẻ học viên.
+    await page.locator("h1").focus();
+    await page.keyboard.press("/");
+    await search.fill("HV001");
+    const hits = bar.getByRole("list", { name: "Kết quả tìm kiếm" });
+    await expect(hits.getByRole("button", { name: new RegExp(`${other.studentName}.*Học viên · HV001`) })).toBeVisible();
+    await hits.getByRole("button", { name: new RegExp(other.studentName) }).click();
+    await expect(detail.getByRole("heading", { name: "Lịch sử điểm danh" })).toBeVisible();
+    await detail.getByRole("button", { name: /^Quay lại/ }).click();
+
+    // Điểm danh ngay trên trang (đúng bảng và action của trang Điểm danh): lưu xong các thẻ tự cập nhật.
+    const chip = bar.locator("[data-live-chip]");
+    await card.getByRole("button", { name: "Điểm danh" }).click();
+    const drawer = page.locator("[data-session-workspace]");
+    await expect(drawer.getByRole("heading", { name: "3D-E2E – Lớp thử 3D" })).toBeVisible();
+    await expect(drawer.getByRole("radiogroup", { name: `Điểm danh ${other.studentName}` }).getByRole("radio", { name: "Có mặt" })).toHaveAttribute("aria-checked", "true");
+    await drawer.getByRole("button", { name: "Lưu điểm danh" }).click();
+    await expect(page.getByText("Đã lưu điểm danh.")).toBeVisible();
+    // Ghi sao ngay trên trang (đúng bảng và action của trang Ghi sao).
+    await drawer.getByRole("tab", { name: "Ghi sao" }).click();
+    await drawer.getByRole("checkbox", { name: `Chọn ${other.studentName}` }).click();
+    await drawer.getByRole("button", { name: "Ghi sao", exact: true }).click();
+    await page.getByRole("button", { name: /Sáng tạo vượt yêu cầu/ }).click();
+    await expect(page.getByText(/Đã ghi \+5 sao/)).toBeVisible();
+    await expect(drawer.getByRole("heading", { name: /Sổ ghi sao của buổi/ })).toContainText("(1)");
+    await drawer.getByRole("button", { name: "Đóng" }).click();
+    await expect(drawer).toHaveCount(0);
+    // Thẻ lớp, các bước, nhãn của phòng, KPI và chip Live đều nhận dữ liệu mới mà không tải lại trang.
+    await expect(card.locator("[data-attendance-rate]")).toContainText("100%");
+    await expect(detail.locator(`[data-student="${other.studentName}"]`)).toContainText("Có mặt");
+    await expect(detail.locator(`[data-student="${other.studentName}"]`)).toContainText("+5");
+    await expect(page.locator('[data-step="attendance"]')).toHaveAttribute("data-step-state", "done");
+    await expect(page.locator('[data-step="stars"]')).toHaveAttribute("data-step-state", "done");
+    await expect(label).toContainText("đã điểm danh");
+    await expect(starsKpi).toHaveText(String(starsBefore + 5));
+    expect(Number(await chip.getAttribute("data-updates")), "chip Live nháy khi có dữ liệu mới").toBeGreaterThan(0);
+    const [saved] = await db`select count(*)::int as n from attendances where session_id = ${other.sessionId}`;
+    expect(saved!.n).toBe(1);
+
+    // Quay lại danh sách phòng rồi chọn phòng ở danh sách, mở buổi học.
+    await detail.getByRole("button", { name: "Tất cả phòng" }).click();
+    await expect(detail.locator('[data-room="Phòng Lab 1"]')).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "Tiến trình các buổi học hôm nay" })).toBeVisible();
+    await detail.locator('[data-room="Phòng 3D E2E"]').click();
+    await detail.getByRole("link", { name: "Mở buổi học" }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/sessions/${other.sessionId}$`));
 
     // 1024px: cảnh ở trên, các thẻ xếp bên dưới, không tràn ngang.
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto("/admin/dashboard");
     await expect(scene.locator("canvas")).toBeVisible({ timeout: 60_000 });
-    await expect(rooms.locator('[data-room="Phòng 3D E2E"]')).toBeVisible();
+    await expect(detail.locator('[data-room="Phòng 3D E2E"]')).toBeVisible();
     expect(await overflow()).toBeLessThanOrEqual(0);
 
-    // Giáo viên khác (phạm vi lớp của mình): vẫn thấy phòng, nhưng không thấy buổi của lớp không phải của mình.
+    // Giáo viên gv.lan (phạm vi lớp của mình): thấy phòng, nhưng không thấy lớp, giáo viên hay học viên của lớp không phải của mình.
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
     const teacherPage = await context.newPage();
     teacherPage.on("pageerror", (error) => pageErrors.push(String(error)));
     await login(teacherPage, "gv.lan", NEW_PASSWORD);
     await expect(teacherPage).toHaveURL(/\/teacher\/dashboard$/);
-    await expect(teacherPage.locator("[data-center-scene] canvas")).toBeVisible({ timeout: 60_000 });
-    await expect(teacherPage.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "idle");
+    const teacherScene = teacherPage.locator("[data-center-scene]");
+    await expect(teacherScene.locator("canvas")).toBeVisible({ timeout: 60_000 });
+    await expect(teacherScene.getByRole("status")).toHaveCount(0, { timeout: 60_000 });
+    const teacherDetail = teacherPage.locator("[data-detail-panel]");
+    await expect(teacherDetail.locator('[data-room="Phòng 3D E2E"]')).toHaveAttribute("data-state", "idle");
     await expect(teacherPage.getByText("Lớp thử 3D")).toHaveCount(0);
     await expect(teacherPage.getByRole("button", { name: /^Tài khoản: .+, Giáo viên$/ })).toBeVisible();
-    await expect(teacherPage.locator("[data-center-scene]").getByRole("list", { name: "Số liệu chính" })).toContainText("Buổi học hôm nay");
+    await expect(teacherScene.getByRole("list", { name: "Số liệu chính" })).toContainText("Học viên hôm nay");
+    // Phòng trống của lớp khác: mở ra không có buổi, không có học viên.
+    await teacherDetail.locator('[data-room="Phòng 3D E2E"]').click();
+    await expect(teacherDetail).toContainText("Hôm nay phòng không có buổi học.");
+    await expect(teacherPage.getByText(other.studentName)).toHaveCount(0);
+    await teacherDetail.getByRole("button", { name: "Tất cả phòng" }).click();
+    // Tìm học viên của lớp khác: không ra; tìm học viên của lớp mình: ra.
+    const teacherBar = teacherPage.locator("header").filter({ hasText: "Live" });
+    const teacherSearch = teacherBar.getByRole("searchbox");
+    await teacherSearch.fill("3D");
+    const teacherHits = teacherBar.getByRole("list", { name: "Kết quả tìm kiếm" });
+    await expect(teacherHits).toContainText("Lớp của Lan 3D");
+    await expect(teacherHits).not.toContainText("Lớp thử 3D");
+    await teacherSearch.fill("HV002");
+    await expect(teacherHits.getByRole("button", { name: new RegExp(mine.studentName) })).toBeVisible();
+    await teacherSearch.fill("");
+    // Lớp của mình: thẻ lớp có học viên; điểm danh ngay trên trang bằng quyền của giáo viên.
+    await teacherDetail.locator('[data-room="Phòng 3D Lan"]').click();
+    const teacherCard = teacherDetail.locator('[data-class-detail="Lớp của Lan 3D"]');
+    await expect(teacherDetail.locator(`[data-student="${mine.studentName}"]`)).toContainText("HV002 · Chưa điểm danh");
+    await teacherCard.getByRole("button", { name: "Điểm danh" }).click();
+    const teacherDrawer = teacherPage.locator("[data-session-workspace]");
+    await teacherDrawer.getByRole("radiogroup", { name: `Điểm danh ${mine.studentName}` }).getByRole("radio", { name: "Đi trễ" }).click();
+    await teacherDrawer.getByRole("button", { name: "Lưu điểm danh" }).click();
+    await expect(teacherPage.getByText("Đã lưu điểm danh.")).toBeVisible();
+    await expect(teacherDrawer.getByRole("tab", { name: "Ghi sao" })).toBeVisible();
+    await teacherDrawer.getByRole("button", { name: "Đóng" }).click();
+    await expect(teacherDetail.locator(`[data-student="${mine.studentName}"]`)).toContainText("Đi trễ");
+    await expect(teacherCard.locator("[data-attendance-rate]")).toContainText("100%");
+    // Thẻ học viên của lớp mình: không có thông tin cá nhân (chỉ mã, lớp, sao, điểm danh).
+    await teacherDetail.locator(`[data-student="${mine.studentName}"] button`).click();
+    await expect(teacherDetail.getByRole("heading", { name: "Lịch sử điểm danh" })).toBeVisible();
+    await expect(teacherDetail).toContainText("Đi trễ");
+    await expect(teacherDetail.getByRole("link", { name: "Mở hồ sơ đầy đủ" })).toHaveAttribute("href", /^\/teacher\/students\/[0-9a-f-]{36}$/);
+    await expect(teacherDetail).not.toContainText(/Phụ huynh|Điện thoại|Ngày sinh/);
+    await teacherPage.waitForTimeout(1300);
     await teacherPage.screenshot({ path: "test-results/shots/stage-teacher-1366.png" });
     await context.close();
 
     expect(pageErrors).toEqual([]);
   } finally {
-    await db`delete from classes where code = '3D-E2E'`;
-    await db`delete from rooms where name = 'Phòng 3D E2E'`;
+    // Sổ sao chỉ xóa được khi bật cờ của Admin trong cùng giao dịch (trigger ở CSDL).
+    await db.begin(async (tx) => {
+      await tx`select set_config('haxi.star_logs_admin_delete', 'on', true)`;
+      await tx`delete from star_logs where session_id in (${other.sessionId}, ${mine.sessionId})`;
+    });
+    await db`delete from classes where code in ('3D-E2E', '3D-E2E2')`;
+    await db`delete from rooms where name in ('Phòng 3D E2E', 'Phòng 3D Lan')`;
     await db.end();
   }
 });

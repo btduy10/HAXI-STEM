@@ -16,12 +16,16 @@ import {
 import { cn } from "@/lib/utils";
 import logo from "../../../public/logo.png";
 import { ClassroomBuilding, MainBuilding, PAVEMENT, ROOM_TOP } from "./buildings";
-import { Arena, Crates, type FigureSpot, Figures, RoadDashes, Robot, type Spot, Trees } from "./scene-props";
+import { Arena, Crates, FigureMarker, type FigureSpot, Figures, RoadDashes, Robot, type Spot, Trees } from "./scene-props";
 import { STATE_DOT, type SceneTheme, readSceneTheme } from "./theme";
 
 export type SceneRoom = { room: CenterRoom; state: RoomState; session: CenterSession | null };
 /** Phần khung cảnh bị các thẻ nổi che (px): cảnh được canh vào vùng còn trống. */
 export type SceneInsets = { top: number; right: number; bottom: number; left: number };
+/** Lệnh bay tới một phòng (null = tòa nhà chính); `nonce` tăng mỗi lần ra lệnh để chọn lại cùng một phòng vẫn bay. */
+export type SceneFlight = { roomId: string | null; nonce: number };
+/** Hình người đang chọn trước cửa một phòng: giáo viên, hoặc học viên thứ `index` (từ 0). */
+export type SceneMarker = { roomId: string; kind: "teacher" | "student"; index: number; label: string };
 /** Lệnh điều khiển máy quay cho cột nút bên cạnh cảnh. */
 export type SceneApi = { zoomIn: () => void; zoomOut: () => void; rotate: () => void; reset: () => void; home: () => void };
 
@@ -32,6 +36,8 @@ const CAMERA_DISTANCE = 120;
 const MIN_ZOOM = 7;
 const MAX_ZOOM = 90;
 const UP = new Vector3(0, 1, 0);
+/** Mã của nhãn nổi phía trên hình người đang chọn (không trùng mã phòng nào). */
+const MARKER_ID = "figure-marker";
 const defaultOffset = () =>
   new Vector3(Math.sin(AZIMUTH) * Math.cos(ELEVATION), Math.sin(ELEVATION), Math.cos(AZIMUTH) * Math.cos(ELEVATION)).multiplyScalar(CAMERA_DISTANCE);
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -41,6 +47,10 @@ const CAMERA = { position: defaultOffset().toArray(), zoom: 14, near: 1, far: 40
 type Controls = { target: Vector3; update: () => void; addEventListener: (type: string, listener: () => void) => void; removeEventListener: (type: string, listener: () => void) => void };
 type Motion = { offset: Vector3 | null; zoom: number | null; target: Vector3 | null };
 const STILL: Motion = { offset: null, zoom: null, target: null };
+/** Một chuyến bay tới đối tượng được chọn: điểm nhìn và mức zoom đi từ `from` tới `to` trong FLIGHT_MS. */
+type Tween = { from: Vector3; to: Vector3; fromZoom: number; toZoom: number; start: number };
+const FLIGHT_MS = 1000;
+const easeInOut = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
 
 /** Vị trí cây: dải đất phía tây và phía bắc sau các dãy nhà, lề ngoài hai con đường, và ba góc sân. */
 function treeSpots(campus: Campus): Spot[] {
@@ -127,20 +137,21 @@ function Ground({ campus, theme, shadows }: { campus: Campus; theme: SceneTheme;
 
 /**
  * Điều khiển máy quay trực giao: canh cảnh vào vùng không bị thẻ nổi che, thực hiện các lệnh của cột nút (phóng to, thu nhỏ,
- * xoay, đặt lại, về tòa nhà chính), lia tới phòng được chọn khi nó nằm sát mép, và giữ điểm nhìn trong phạm vi khuôn viên.
+ * xoay, đặt lại, về tòa nhà chính), bay tới đối tượng vừa được chọn (khoảng 1 giây, vào chậm ra chậm), và giữ điểm nhìn
+ * trong phạm vi khuôn viên.
  */
 function CameraRig({
   campus,
   insets,
   apiRef,
-  focus,
+  flight,
   animate,
 }: {
   campus: Campus;
   insets: SceneInsets;
   apiRef: RefObject<SceneApi | null>;
-  /** Tâm (x, z) của phòng đang chọn. */
-  focus: [number, number] | null;
+  /** Điểm (x, z) cần bay tới; đối tượng mới mỗi lần ra lệnh. */
+  flight: { x: number; z: number } | null;
   animate: boolean;
 }) {
   const invalidate = useThree((state) => state.invalidate);
@@ -149,26 +160,29 @@ function CameraRig({
   const controls = useThree((state) => state.controls);
   const motion = useRef<Motion>(STILL);
   const fit = useRef({ key: "", zoom: 14, ready: false });
-  const pendingFocus = useRef<Vector3 | null>(null);
+  const pendingFlight = useRef<Vector3 | null>(null);
+  const tween = useRef<Tween | null>(null);
   const fitKey = `${size.width}x${size.height}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${campus.bounds.width}x${campus.bounds.depth}`;
 
   useEffect(() => invalidate(), [fitKey, invalidate]);
   useEffect(() => {
-    pendingFocus.current = focus ? new Vector3(focus[0], 0, focus[1]) : null;
+    pendingFlight.current = flight ? new Vector3(flight.x, 0, flight.z) : null;
     invalidate();
-  }, [focus, invalidate]);
+  }, [flight, invalidate]);
   // Người dùng tự kéo hoặc lăn chuột thì dừng mọi chuyển động đang chạy.
   useEffect(() => {
     const orbit = controls as unknown as Controls | null;
     if (!orbit) return;
     const stop = () => {
       motion.current = STILL;
+      tween.current = null;
     };
     orbit.addEventListener("start", stop);
     return () => orbit.removeEventListener("start", stop);
   }, [controls]);
   useEffect(() => {
     const go = (next: Partial<Motion>) => {
+      tween.current = null;
       motion.current = { ...motion.current, ...next };
       invalidate();
     };
@@ -211,11 +225,23 @@ function CameraRig({
     const orbit = state.controls as unknown as Controls | null;
     if (!orbit) return;
 
-    // Phòng vừa được chọn: chỉ lia tới khi nó nằm sát mép hoặc ngoài khung nhìn.
-    if (pendingFocus.current) {
-      const seen = pendingFocus.current.clone().project(camera);
-      if (Math.abs(seen.x) > 0.7 || Math.abs(seen.y) > 0.7) motion.current = { ...motion.current, target: pendingFocus.current };
-      pendingFocus.current = null;
+    // Đối tượng vừa được chọn: bay tới và phóng gần hơn mức vừa cả khuôn viên (không thu nhỏ nếu người dùng đang phóng to hơn).
+    if (pendingFlight.current) {
+      const toZoom = clamp(Math.max(camera.zoom, fit.current.zoom * 1.55), MIN_ZOOM, MAX_ZOOM);
+      tween.current = { from: orbit.target.clone(), to: pendingFlight.current, fromZoom: camera.zoom, toZoom, start: performance.now() };
+      motion.current = { ...motion.current, target: null, zoom: null };
+      pendingFlight.current = null;
+    }
+    const flying = tween.current;
+    if (flying) {
+      const k = animate ? clamp((performance.now() - flying.start) / FLIGHT_MS, 0, 1) : 1;
+      const eased = easeInOut(k);
+      const step = flying.from.clone().lerp(flying.to, eased).sub(orbit.target);
+      camera.position.add(step);
+      orbit.target.add(step);
+      camera.zoom = flying.fromZoom + (flying.toZoom - flying.fromZoom) * eased;
+      camera.updateProjectionMatrix();
+      if (k >= 1) tween.current = null;
     }
 
     const move = motion.current;
@@ -252,7 +278,7 @@ function CameraRig({
     }
     orbit.update();
     const { offset, zoom, target } = motion.current;
-    if (offset || zoom !== null || target) state.invalidate();
+    if (offset || zoom !== null || target || tween.current) state.invalidate();
   });
   return null;
 }
@@ -303,6 +329,7 @@ function RoomLabel({
           {shown.studentCount !== null && (
             <span className="text-ink-soft">
               Sĩ số {shown.studentCount}/{room.capacity}
+              {shown.attendanceCount > 0 && " · đã điểm danh"}
             </span>
           )}
         </>
@@ -321,17 +348,18 @@ function RoomLabel({
  * Mỗi khung hình: chiếu điểm phía trên mái từng phòng lên màn hình rồi dời nhãn HTML của phòng tới đó (đáy nhãn chạm điểm ấy),
  * co giãn theo mức zoom; phòng gần máy quay hơn nằm trên. Nhãn của phòng ra ngoài khung nhìn thì ẩn.
  */
-function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number; z: number }[]; labels: RefObject<Map<string, HTMLElement>> }) {
+function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number; y: number; z: number }[]; labels: RefObject<Map<string, HTMLElement>> }) {
   const invalidate = useThree((state) => state.invalidate);
-  // Danh sách phòng đổi (nhãn mới được gắn): vẽ lại một khung hình để đặt vị trí.
-  useEffect(() => invalidate(), [anchors, invalidate]);
+  // Danh sách điểm neo đổi (nhãn mới được gắn): vẽ lại một khung hình để đặt vị trí.
+  const anchorKey = anchors.map((anchor) => `${anchor.id}:${anchor.x},${anchor.z}`).join("|");
+  useEffect(() => invalidate(), [anchorKey, invalidate]);
   useFrame(({ camera, size }) => {
     const point = new Vector3();
     const scale = clamp(camera.zoom / 15, 0.82, 1.1);
     for (const anchor of anchors) {
       const element = labels.current.get(anchor.id);
       if (!element) continue;
-      point.set(anchor.x, ROOM_TOP + 1.25, anchor.z).project(camera);
+      point.set(anchor.x, anchor.y, anchor.z).project(camera);
       const inView = Math.abs(point.z) < 1 && Math.abs(point.x) < 1.1 && Math.abs(point.y) < 1.1;
       element.style.visibility = inView ? "visible" : "hidden";
       if (!inView) continue;
@@ -346,14 +374,17 @@ function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number;
 
 /**
  * Cảnh 3D isometric của trung tâm: tòa nhà chính, các phòng học theo `layoutCampus`, sân, đường, cây, robot.
- * Chỉ để xem: bấm phòng (hoặc nhãn của phòng) để chọn; việc mở buổi học nằm ở thẻ chi tiết. Màu lấy từ CSS variable của ứng dụng.
- * Chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
+ * Bấm phòng (hoặc nhãn của phòng), hình giáo viên hay hình học viên trước cửa phòng đang học để chọn; mọi thao tác nằm ở các
+ * thẻ bên cạnh. Robot là vật trang trí. Màu lấy từ CSS variable của ứng dụng. Chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
  */
 export function CenterScene({
   campus,
   rooms,
   selectedId,
   onSelect,
+  flight,
+  marker,
+  onPickFigure,
   insets,
   apiRef,
   onReady,
@@ -362,6 +393,9 @@ export function CenterScene({
   rooms: SceneRoom[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  flight: SceneFlight | null;
+  marker: SceneMarker | null;
+  onPickFigure: (roomId: string, kind: "teacher" | "student", index: number) => void;
   insets: SceneInsets;
   apiRef: RefObject<SceneApi | null>;
   /** Gọi khi khung hình đầu tiên đã sẵn sàng (để tắt màn hình chờ). */
@@ -377,9 +411,12 @@ export function CenterScene({
   const shadows = !lowEnd;
   const placementOf = useMemo(() => new Map(campus.rooms.map((placement) => [placement.id, placement])), [campus]);
   const trees = useMemo(() => treeSpots(campus), [campus]);
-  const anchors = useMemo(() => campus.rooms.map(({ id, x, z }) => ({ id, x, z })), [campus]);
-  const selected = selectedId ? placementOf.get(selectedId) : undefined;
-  const focus = useMemo<[number, number] | null>(() => (selected ? [selected.x, selected.z] : null), [selected]);
+  // Điểm bay tới: tâm phòng được chọn; không có phòng (buổi chưa xếp phòng) thì là sảnh tòa nhà chính.
+  const flightTo = useMemo(() => {
+    if (!flight) return null;
+    const placement = flight.roomId ? placementOf.get(flight.roomId) : undefined;
+    return placement ? { x: placement.x, z: placement.z } : { x: campus.main.x, z: campus.main.z + MAIN_DEPTH / 2 + 2 };
+  }, [flight, placementOf, campus]);
 
   const arena = { x: campus.plaza.x + 0.5, z: campus.plaza.z + 0.8 };
   // Hình người: vài người đứng quanh sa bàn, và trước cửa mỗi phòng đang học là giáo viên cùng nhóm học viên theo sĩ số (tối đa 8).
@@ -388,27 +425,39 @@ export function CenterScene({
     { x: arena.x - 1.2, z: arena.z - 2.7, color: theme.gold, height: 1.6 },
     { x: arena.x + 1.4, z: arena.z - 2.8, color: theme.teal, height: 1.6 },
   ];
+  let marked: FigureSpot | null = null;
   for (const item of rooms) {
     const placement = placementOf.get(item.room.id);
     if (!placement || item.state !== "live" || !item.session) continue;
-    const local: { x: number; z: number; color: string; height: number }[] = [];
-    if (item.session.teacherName) local.push({ x: -1.9, z: ROOM_DEPTH / 2 + 1, color: theme.ink, height: 2 });
+    const roomId = item.room.id;
+    const local: (FigureSpot & { kind: "teacher" | "student"; index: number })[] = [];
+    if (item.session.teacherId && item.session.teacherName) {
+      local.push({ x: -1.9, z: ROOM_DEPTH / 2 + 1, color: theme.ink, height: 2, kind: "teacher", index: 0 });
+    }
     const count = Math.min(item.session.studentCount ?? 0, 8);
     for (let index = 0; index < count; index++) {
-      local.push({ x: ((index % 4) - 1.5) * 0.85 + 1.2, z: ROOM_DEPTH / 2 + 1.05 + Math.floor(index / 4) * 0.85, color: shirts[index % shirts.length]!, height: 1.55 });
+      local.push({ x: ((index % 4) - 1.5) * 0.85 + 1.2, z: ROOM_DEPTH / 2 + 1.05 + Math.floor(index / 4) * 0.85, color: shirts[index % shirts.length]!, height: 1.55, kind: "student", index });
     }
     // Tọa độ riêng của tòa nhà (mặt tiền quay về +Z) đổi sang tọa độ khuôn viên theo hướng cửa.
-    for (const spot of local) {
-      figures.push(
-        placement.facing === "south"
-          ? { ...spot, x: placement.x + spot.x, z: placement.z + spot.z }
-          : { ...spot, x: placement.x + spot.z, z: placement.z - spot.x },
-      );
+    for (const { kind, index, ...spot } of local) {
+      const placed: FigureSpot = {
+        ...spot,
+        ...(placement.facing === "south" ? { x: placement.x + spot.x, z: placement.z + spot.z } : { x: placement.x + spot.z, z: placement.z - spot.x }),
+        onPick: () => onPickFigure(roomId, kind, index),
+      };
+      figures.push(placed);
+      if (marker && marker.roomId === roomId && marker.kind === kind && marker.index === index) marked = placed;
     }
   }
+  const markedSpot = marked as FigureSpot | null;
+  // Điểm neo của các nhãn HTML: phía trên mái từng phòng, và phía trên đầu hình người đang chọn.
+  const anchors = [
+    ...campus.rooms.map(({ id, x, z }) => ({ id, x, y: ROOM_TOP + 1.25, z })),
+    ...(markedSpot ? [{ id: MARKER_ID, x: markedSpot.x, y: markedSpot.height + 1.75, z: markedSpot.z }] : []),
+  ];
 
   const labels = useRef(new Map<string, HTMLElement>());
-  const register = (id: string, element: HTMLButtonElement | null) => {
+  const register = (id: string, element: HTMLElement | null) => {
     if (element) labels.current.set(id, element);
     else labels.current.delete(id);
   };
@@ -458,6 +507,7 @@ export function CenterScene({
                 placement={placement}
                 state={item.state}
                 selected={item.room.id === selectedId}
+                attended={item.state !== "idle" && (item.session?.attendanceCount ?? 0) > 0}
                 theme={theme}
                 shadows={shadows}
                 onSelect={() => onSelect(item.room.id)}
@@ -472,6 +522,7 @@ export function CenterScene({
         <Robot x={arena.x + 0.4} z={arena.z + 3.2} turn={0.3} theme={theme} shadows={shadows} />
         <Robot x={campus.main.x + 3.1} z={campus.main.z + MAIN_DEPTH / 2 + 2.6} turn={0.6} theme={theme} shadows={shadows} />
         <Figures spots={figures} theme={theme} shadows={shadows} />
+        {markedSpot && <FigureMarker spot={markedSpot} theme={theme} />}
         <Trees spots={trees} theme={theme} shadows={shadows} />
 
         <OrbitControls
@@ -484,7 +535,7 @@ export function CenterScene({
           minPolarAngle={0.45}
           maxPolarAngle={1.12}
         />
-        <CameraRig campus={campus} insets={insets} apiRef={apiRef} focus={focus} animate={!reducedMotion} />
+        <CameraRig campus={campus} insets={insets} apiRef={apiRef} flight={flightTo} animate={!reducedMotion} />
         <LabelProjector anchors={anchors} labels={labels} />
       </Canvas>
       {/* Lớp nhãn HTML phủ trên cảnh: không chặn chuột của cảnh, chỉ các nút nhãn nhận bấm. */}
@@ -492,6 +543,15 @@ export function CenterScene({
         {rooms.map((item) => (
           <RoomLabel key={item.room.id} item={item} selected={item.room.id === selectedId} onSelect={onSelect} register={register} />
         ))}
+        {marker && markedSpot && (
+          <p
+            ref={(element) => register(MARKER_ID, element)}
+            data-scene-marker
+            className="invisible absolute top-0 left-0 w-max max-w-52 origin-bottom truncate rounded-full border border-primary bg-card px-2.5 py-1 text-xs font-semibold text-foreground shadow-panel ring-2 ring-primary/30"
+          >
+            {marker.label}
+          </p>
+        )}
       </div>
     </div>
   );

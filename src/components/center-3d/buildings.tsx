@@ -2,7 +2,7 @@
 
 import { type ThreeEvent, useThree } from "@react-three/fiber";
 import { useEffect, useState } from "react";
-import { SRGBColorSpace, type Texture, TextureLoader } from "three";
+import { BackSide, SRGBColorSpace, type Texture, TextureLoader } from "three";
 import { type BuildingPlacement, MAIN_DEPTH, MAIN_WIDTH, ROOM_DEPTH, type Rect, type RoomState } from "@/domain/center-3d";
 import { type SceneTheme, stateColor } from "./theme";
 
@@ -39,12 +39,14 @@ function Box({
 
 /**
  * Một phòng học: thân trắng kem, mái và viền cửa màu thương hiệu, cửa, cửa sổ, biển tên. Dải màu dưới mái và đèn báo trên
- * mái theo trạng thái (đang học, sắp học…). Bấm vào để chọn phòng.
+ * mái theo trạng thái (đang học, sắp học…). Bấm vào để chọn phòng. Phòng đang chọn có viền sáng màu xanh ngọc bao quanh;
+ * phòng có buổi đã điểm danh có dấu tick nổi ở góc mái.
  */
 export function ClassroomBuilding({
   placement,
   state,
   selected,
+  attended,
   theme,
   shadows,
   onSelect,
@@ -52,6 +54,8 @@ export function ClassroomBuilding({
   placement: BuildingPlacement;
   state: RoomState;
   selected: boolean;
+  /** Buổi đang ghi trên nhãn của phòng đã được điểm danh. */
+  attended: boolean;
   theme: SceneTheme;
   shadows: boolean;
   onSelect: () => void;
@@ -74,10 +78,18 @@ export function ClassroomBuilding({
   };
   // Cửa sổ mặt tiền hai bên cửa (phòng đủ rộng), và hai cửa sổ ở mỗi mặt bên.
   const frontWindows = front >= 7 ? [-(front / 2 - 1.45), front / 2 - 1.45] : [];
+  const turn = placement.facing === "south" ? 0 : Math.PI / 2;
 
   return (
-    <group position={[placement.x, 0, placement.z]} rotation-y={placement.facing === "south" ? 0 : Math.PI / 2}>
-      {(selected || hovered) && <Box size={[front + 1.3, 0.05, depth + 1.3]} position={[0, PAVEMENT + 0.03, 0]} color={selected ? theme.roof : theme.done} />}
+    <group position={[placement.x, 0, placement.z]} rotation-y={turn}>
+      {(selected || hovered) && <Box size={[front + 1.5, 0.05, depth + 1.5]} position={[0, PAVEMENT + 0.03, 0]} color={selected ? theme.teal : theme.done} emissive={selected ? 0.5 : 0} />}
+      {/* Viền sáng của phòng đang chọn: một khối lớn hơn chỉ vẽ mặt trong, ló ra quanh đường bao của tòa nhà. */}
+      {selected && (
+        <mesh position={[0, base + WALL_HEIGHT / 2 + 0.2, 0]}>
+          <boxGeometry args={[front + 1.05, WALL_HEIGHT + 1, depth + 1.05]} />
+          <meshBasicMaterial color={theme.teal} side={BackSide} toneMapped={false} />
+        </mesh>
+      )}
       <Box size={[front + 0.3, 0.2, depth + 0.3]} position={[0, PAVEMENT + 0.1, 0]} color={theme.trim} shadows={shadows} />
       <mesh position={[0, base + WALL_HEIGHT / 2, 0]} castShadow={shadows} receiveShadow={shadows} onClick={pick} onPointerOver={hover(true)} onPointerOut={hover(false)}>
         <boxGeometry args={[front, WALL_HEIGHT, depth]} />
@@ -102,6 +114,24 @@ export function ClassroomBuilding({
         [-1.5, 1.5].map((z) => (
           <Box key={`${side}|${z}`} size={[0.08, 1.15, 1.25]} position={[side * (front / 2 + 0.04), base + 1.75, z]} color={theme.glass} />
         )),
+      )}
+
+      {/* Dấu tick nổi ở góc mái: buổi đã điểm danh. Mặt đĩa quay về hướng nhìn mặc định (đông nam). */}
+      {attended && (
+        <group position={[front / 2 - 0.85, ROOM_TOP + 0.95, depth / 2 - 0.85]} rotation-y={Math.PI / 4 - turn}>
+          <mesh rotation-x={Math.PI / 2}>
+            <cylinderGeometry args={[0.55, 0.55, 0.1, 24]} />
+            <meshStandardMaterial color={theme.live} emissive={theme.live} emissiveIntensity={0.35} />
+          </mesh>
+          <mesh position={[-0.17, -0.07, 0.07]} rotation-z={0.8}>
+            <boxGeometry args={[0.12, 0.32, 0.04]} />
+            <meshBasicMaterial color={theme.white} toneMapped={false} />
+          </mesh>
+          <mesh position={[0.09, 0.03, 0.07]} rotation-z={-0.62}>
+            <boxGeometry args={[0.12, 0.58, 0.04]} />
+            <meshBasicMaterial color={theme.white} toneMapped={false} />
+          </mesh>
+        </group>
       )}
 
       {/* Đèn báo trên mái: phòng đang học hoặc sắp học. */}

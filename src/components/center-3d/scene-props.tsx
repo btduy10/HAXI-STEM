@@ -1,13 +1,15 @@
 "use client";
 
 import { Instance, Instances, RoundedBox } from "@react-three/drei";
+import type { ThreeEvent } from "@react-three/fiber";
+import { BackSide } from "three";
 import type { Rect } from "@/domain/center-3d";
 import type { SceneTheme } from "./theme";
 
 // Các vật thể của sân: cây, vạch đường, hình người, robot, sa bàn, hộp linh kiện. Vật lặp lại dùng InstancedMesh (drei Instances).
 
 export type Spot = { x: number; z: number };
-export type FigureSpot = Spot & { color: string; /** Chiều cao tới đỉnh đầu. */ height: number };
+export type FigureSpot = Spot & { color: string; /** Chiều cao tới đỉnh đầu. */ height: number; /** Bấm vào hình người này (giáo viên, học viên của một phòng). */ onPick?: () => void };
 
 /** Cây low-poly: thân trụ và hai tầng tán hình nón. */
 export function Trees({ spots, theme, shadows }: { spots: Spot[]; theme: SceneTheme; shadows: boolean }) {
@@ -55,7 +57,12 @@ export function RoadDashes({ roads, theme }: { roads: Rect[]; theme: SceneTheme 
   );
 }
 
-/** Hình người low-poly (học viên, giáo viên): thân trụ bo tròn và đầu, mỗi người một màu áo. */
+const pointer = (value: boolean) => (event: ThreeEvent<PointerEvent>) => {
+  event.stopPropagation();
+  document.body.style.cursor = value ? "pointer" : "";
+};
+
+/** Hình người low-poly (học viên, giáo viên): thân trụ bo tròn và đầu, mỗi người một màu áo. Hình có `onPick` thì bấm được. */
 export function Figures({ spots, theme, shadows }: { spots: FigureSpot[]; theme: SceneTheme; shadows: boolean }) {
   if (spots.length === 0) return null;
   return (
@@ -63,9 +70,26 @@ export function Figures({ spots, theme, shadows }: { spots: FigureSpot[]; theme:
       <Instances limit={spots.length} castShadow={shadows}>
         <capsuleGeometry args={[0.2, 0.5, 4, 10]} />
         <meshStandardMaterial />
-        {spots.map((spot, index) => (
-          <Instance key={index} position={[spot.x, 0.1 + spot.height * 0.36, spot.z]} scale={spot.height / 1.25} color={spot.color} />
-        ))}
+        {spots.map((spot, index) => {
+          const pick = spot.onPick;
+          return (
+            <Instance
+              key={index}
+              position={[spot.x, 0.1 + spot.height * 0.36, spot.z]}
+              scale={spot.height / 1.25}
+              color={spot.color}
+              onClick={
+                pick &&
+                ((event: ThreeEvent<MouseEvent>) => {
+                  event.stopPropagation();
+                  pick();
+                })
+              }
+              onPointerOver={pick && pointer(true)}
+              onPointerOut={pick && pointer(false)}
+            />
+          );
+        })}
       </Instances>
       <Instances limit={spots.length} castShadow={shadows}>
         <sphereGeometry args={[0.19, 14, 10]} />
@@ -75,6 +99,27 @@ export function Figures({ spots, theme, shadows }: { spots: FigureSpot[]; theme:
         ))}
       </Instances>
     </>
+  );
+}
+
+/** Đánh dấu hình người đang chọn: vòng sáng dưới chân, viền sáng quanh thân và mũi tên chỉ xuống phía trên đầu. */
+export function FigureMarker({ spot, theme }: { spot: FigureSpot; theme: SceneTheme }) {
+  const scale = spot.height / 1.25;
+  return (
+    <group position={[spot.x, 0.1, spot.z]}>
+      <mesh position-y={0.03}>
+        <cylinderGeometry args={[0.62, 0.62, 0.04, 28]} />
+        <meshStandardMaterial color={theme.teal} emissive={theme.teal} emissiveIntensity={0.6} />
+      </mesh>
+      <mesh position-y={spot.height * 0.36} scale={scale * 1.32}>
+        <capsuleGeometry args={[0.2, 0.5, 4, 10]} />
+        <meshBasicMaterial color={theme.teal} side={BackSide} toneMapped={false} />
+      </mesh>
+      <mesh position-y={spot.height + 0.75} rotation-x={Math.PI}>
+        <coneGeometry args={[0.24, 0.48, 4]} />
+        <meshStandardMaterial color={theme.teal} emissive={theme.teal} emissiveIntensity={0.6} flatShading />
+      </mesh>
+    </group>
   );
 }
 
