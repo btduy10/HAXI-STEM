@@ -7,14 +7,23 @@ import {
   MAIN_WIDTH,
   ROOM_DEPTH,
   type Rect,
+  LANE_INSET,
+  WALK_SECONDS,
   dayProgress,
+  doorSpot,
   kpiDelta,
   layoutCampus,
+  loopPath,
+  pathLength,
+  pointOnPath,
+  robotLoops,
   minutesOf,
   roomFront,
   roomStatus,
+  sessionPhase,
   sessionProgress,
   sessionSteps,
+  walkPath,
 } from "@/domain/center-3d";
 import { timeNow } from "@/lib/format";
 
@@ -205,5 +214,91 @@ describe("dashboard 3D: trạng thái phòng và tiến trình buổi học theo
     expect(timeNow(new Date("2026-01-21T05:07:00Z"))).toBe("12:07");
     expect(timeNow(new Date("2026-01-21T17:00:00Z"))).toBe("00:00");
     expect(timeNow(new Date("2026-01-21T16:59:00Z"))).toBe("23:59");
+  });
+});
+
+describe("dashboard 3D: chuyển động theo thời khóa biểu", () => {
+  const at = (time: string, seconds = 0) => Number(time.slice(0, 2)) * 3600 + Number(time.slice(3, 5)) * 60 + seconds;
+  const morning = { startTime: "08:00", endTime: "09:30", cancelled: false };
+  const box = (rect: Rect) => ({ minX: rect.x - rect.width / 2, maxX: rect.x + rect.width / 2, minZ: rect.z - rect.depth / 2, maxZ: rect.z + rect.depth / 2 });
+  const within = (point: { x: number; z: number }, area: ReturnType<typeof box>) => point.x > area.minX && point.x < area.maxX && point.z > area.minZ && point.z < area.maxZ;
+
+  it("giai đoạn của buổi: đang tới 3 phút trước giờ học, trong giờ, đang về 3 phút sau giờ học; ngoài ra không có ai", () => {
+    expect(WALK_SECONDS).toBe(180);
+    expect(sessionPhase(morning, at("07:56", 59))).toBeNull();
+    expect(sessionPhase(morning, at("07:57"))).toEqual({ phase: "arriving", t: 0 });
+    expect(sessionPhase(morning, at("07:58", 30))).toEqual({ phase: "arriving", t: 0.5 });
+    expect(sessionPhase(morning, at("08:00"))).toEqual({ phase: "live", t: 0 });
+    expect(sessionPhase(morning, at("08:45"))).toEqual({ phase: "live", t: 0.5 });
+    expect(sessionPhase(morning, at("09:30"))).toEqual({ phase: "leaving", t: 0 });
+    expect(sessionPhase(morning, at("09:31", 30))).toEqual({ phase: "leaving", t: 0.5 });
+    expect(sessionPhase(morning, at("09:33"))).toBeNull();
+    expect(sessionPhase({ ...morning, cancelled: true }, at("08:45"))).toBeNull();
+  });
+
+  it("điểm trên lộ trình: đi đều theo quãng đường, hướng theo đoạn đang đi, kẹp trong 0–1", () => {
+    const path = [{ x: 0, z: 0 }, { x: 6, z: 0 }, { x: 6, z: 2 }];
+    expect(pathLength(path)).toBe(8);
+    expect(pointOnPath(path, 0)).toMatchObject({ x: 0, z: 0 });
+    expect(pointOnPath(path, 0.375)).toEqual({ x: 3, z: 0, heading: Math.PI / 2 });
+    expect(pointOnPath(path, 0.875)).toEqual({ x: 6, z: 1, heading: 0 });
+    expect(pointOnPath(path, 1)).toMatchObject({ x: 6, z: 2 });
+    expect(pointOnPath(path, 7)).toMatchObject({ x: 6, z: 2 });
+    expect(pointOnPath(path, -1)).toMatchObject({ x: 0, z: 0 });
+    expect(pointOnPath([{ x: 2, z: 3 }], 0.5)).toEqual({ x: 2, z: 3, heading: 0 });
+  });
+
+  it("lộ trình vào lớp: bắt đầu ở cổng ngoài sân, kết thúc đúng chỗ đứng trước cửa, không cắt qua tòa nhà nào", () => {
+    for (const count of [1, 2, 3, 5, 8, 12]) {
+      const campus = layoutCampus(Array.from({ length: count }, (_, index) => room(String(index), 6 + index * 3)));
+      const plaza = box(campus.plaza);
+      const buildings = [campus.main, ...campus.rooms].map(box);
+      for (const placement of campus.rooms) {
+        // Chỗ đứng xa nhất về hai phía trước cửa (giáo viên bên trái, hàng học viên thứ hai bên phải).
+        for (const local of [{ x: -1.9, z: ROOM_DEPTH / 2 + 1 }, { x: 2.5, z: ROOM_DEPTH / 2 + 1.9 }]) {
+          const slot = doorSpot(placement, local);
+          const path = walkPath(campus, placement, slot);
+          expect(path.at(-1)).toEqual(slot);
+          const gate = path[0]!;
+          // Cổng nằm ngay ngoài mép sân, phía con đường tương ứng với dãy nhà.
+          if (placement.facing === "south") expect(gate.x).toBeGreaterThan(plaza.maxX);
+          else expect(gate.z).toBeGreaterThan(plaza.maxZ);
+          // Mọi đoạn song song với trục; không điểm nào trên đường đi nằm trong một tòa nhà.
+          for (let index = 1; index < path.length; index++) {
+            expect(path[index]!.x === path[index - 1]!.x || path[index]!.z === path[index - 1]!.z).toBe(true);
+          }
+          for (let step = 0; step <= 200; step++) {
+            const point = pointOnPath(path, step / 200);
+            expect(buildings.some((area) => within(point, area)), `${count} phòng, phòng ${placement.id}, bước ${step}`).toBe(false);
+          }
+          // Lối đi nằm trong sân, cách mép sân phía dãy nhà đúng LANE_INSET.
+          const lane = path[1]!;
+          if (placement.facing === "south") expect(lane.z).toBeCloseTo(plaza.minZ + LANE_INSET);
+          else expect(lane.x).toBeCloseTo(plaza.minX + LANE_INSET);
+        }
+      }
+    }
+  });
+
+  it("vòng tuần tra của robot: ba vòng khép kín, nằm trong khuôn viên, không đi vào tòa nhà nào", () => {
+    for (const count of [0, 1, 3, 8, 12]) {
+      const campus = layoutCampus(Array.from({ length: count }, (_, index) => room(String(index), 10)));
+      const buildings = [campus.main, ...campus.rooms].map(box);
+      const bounds = box(campus.bounds);
+      const loops = robotLoops(campus);
+      expect(loops).toHaveLength(3);
+      for (const rect of loops) {
+        expect(rect.width).toBeGreaterThan(0);
+        expect(rect.depth).toBeGreaterThan(0);
+        const path = loopPath(rect);
+        expect(path[0]).toEqual(path.at(-1));
+        expect(pathLength(path)).toBeCloseTo(2 * (rect.width + rect.depth));
+        for (let step = 0; step < 100; step++) {
+          const point = pointOnPath(path, step / 100);
+          expect(within(point, bounds)).toBe(true);
+          expect(buildings.some((area) => within(point, area))).toBe(false);
+        }
+      }
+    }
   });
 });

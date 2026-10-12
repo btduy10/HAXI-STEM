@@ -61,6 +61,13 @@ export function ClassroomBuilding({
   onSelect: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  // Phòng bị gỡ khỏi cảnh lúc đang rê chuột: trả lại con trỏ.
+  useEffect(
+    () => () => {
+      document.body.style.cursor = "";
+    },
+    [],
+  );
   const front = placement.front;
   const depth = ROOM_DEPTH;
   const accent = stateColor(theme, state);
@@ -83,11 +90,12 @@ export function ClassroomBuilding({
   return (
     <group position={[placement.x, 0, placement.z]} rotation-y={turn}>
       {(selected || hovered) && <Box size={[front + 1.5, 0.05, depth + 1.5]} position={[0, PAVEMENT + 0.03, 0]} color={selected ? theme.teal : theme.done} emissive={selected ? 0.5 : 0} />}
-      {/* Viền sáng của phòng đang chọn: một khối lớn hơn chỉ vẽ mặt trong, ló ra quanh đường bao của tòa nhà. */}
-      {selected && (
+      {/* Viền sáng của phòng đang chọn (xanh ngọc) hoặc đang rê chuột (nhạt hơn): một khối lớn hơn chỉ vẽ mặt trong, ló ra quanh
+          đường bao của tòa nhà. */}
+      {(selected || hovered) && (
         <mesh position={[0, base + WALL_HEIGHT / 2 + 0.2, 0]}>
-          <boxGeometry args={[front + 1.05, WALL_HEIGHT + 1, depth + 1.05]} />
-          <meshBasicMaterial color={theme.teal} side={BackSide} toneMapped={false} />
+          <boxGeometry args={[front + (selected ? 1.05 : 0.9), WALL_HEIGHT + (selected ? 1 : 0.85), depth + (selected ? 1.05 : 0.9)]} />
+          <meshBasicMaterial color={selected ? theme.teal : theme.done} side={BackSide} toneMapped={false} />
         </mesh>
       )}
       <Box size={[front + 0.3, 0.2, depth + 0.3]} position={[0, PAVEMENT + 0.1, 0]} color={theme.trim} shadows={shadows} />

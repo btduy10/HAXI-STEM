@@ -12,11 +12,17 @@ import {
   ROOM_DEPTH,
   ROOM_STATE_LABELS,
   type RoomState,
+  arenaSpot,
+  doorSpot,
+  robotLoops,
+  walkPath,
 } from "@/domain/center-3d";
 import { cn } from "@/lib/utils";
 import logo from "../../../public/logo.png";
 import { ClassroomBuilding, MainBuilding, PAVEMENT, ROOM_TOP } from "./buildings";
-import { Arena, Crates, FigureMarker, type FigureSpot, Figures, RoadDashes, Robot, type Spot, Trees } from "./scene-props";
+import { graphics } from "./device";
+import { type BurstPlace, Figures, type MarkerSpot, Patrols, Pulse, SceneStats, StarBursts, type Walker } from "./motion";
+import { Arena, Crates, RoadDashes, type Spot, Trees } from "./scene-props";
 import { STATE_DOT, type SceneTheme, readSceneTheme } from "./theme";
 
 export type SceneRoom = { room: CenterRoom; state: RoomState; session: CenterSession | null };
@@ -308,7 +314,6 @@ function RoomLabel({
       type="button"
       onClick={() => onSelect(room.id)}
       aria-pressed={selected}
-      aria-label={`${room.name}: ${ROOM_STATE_LABELS[state]}${shown ? `, ${shown.className}` : ""}`}
       className={cn(
         "pointer-events-auto invisible absolute top-0 left-0 grid w-max max-w-52 origin-bottom gap-0.5 rounded-xl border bg-card px-2.5 py-1.5 text-left text-xs leading-tight text-foreground shadow-panel outline-none select-none",
         "focus-visible:ring-3 focus-visible:ring-ring/60",
@@ -317,7 +322,11 @@ function RoomLabel({
     >
       <span className="flex items-center gap-1.5 font-semibold">
         <span aria-hidden className={cn("size-2 shrink-0 rounded-full", STATE_DOT[state])} />
-        <span className="truncate">{room.name}</span>
+        <span className="truncate">
+          {room.name}
+          {/* Trạng thái đọc cho trình đọc màn hình; phần chữ đang hiện bên dưới đọc tiếp theo. */}
+          {shown && <span className="sr-only">{`: ${ROOM_STATE_LABELS[state]}, `}</span>}
+        </span>
       </span>
       {shown && detailed ? (
         <>
@@ -338,7 +347,10 @@ function RoomLabel({
           {shown.startTime} · {shown.className}
         </span>
       ) : (
-        <span className="text-ink-soft">{ROOM_STATE_LABELS[state]}</span>
+        <span className="text-ink-soft">
+          <span className="sr-only">: </span>
+          {ROOM_STATE_LABELS[state]}
+        </span>
       )}
     </button>
   );
@@ -348,25 +360,46 @@ function RoomLabel({
  * Mỗi khung hình: chiếu điểm phía trên mái từng phòng lên màn hình rồi dời nhãn HTML của phòng tới đó (đáy nhãn chạm điểm ấy),
  * co giãn theo mức zoom; phòng gần máy quay hơn nằm trên. Nhãn của phòng ra ngoài khung nhìn thì ẩn.
  */
-function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number; y: number; z: number }[]; labels: RefObject<Map<string, HTMLElement>> }) {
+function LabelProjector({
+  anchors,
+  labels,
+  markerRef,
+}: {
+  anchors: { id: string; x: number; y: number; z: number }[];
+  labels: RefObject<Map<string, HTMLElement>>;
+  /** Vị trí hình người đang chọn (đổi theo từng khung hình khi người đó đang đi). */
+  markerRef: RefObject<MarkerSpot | null>;
+}) {
   const invalidate = useThree((state) => state.invalidate);
+  // Chỉ ghi vào DOM khi vị trí thật sự đổi (cảnh được vẽ liên tục khi có chuyển động nền).
+  const written = useRef(new Map<string, string>());
+  const place = (id: string, element: HTMLElement, value: string, key: "transform" | "visibility" | "zIndex") => {
+    const slot = `${id}|${key}`;
+    if (written.current.get(slot) === value && element.style[key] === value) return;
+    written.current.set(slot, value);
+    element.style[key] = value;
+  };
   // Danh sách điểm neo đổi (nhãn mới được gắn): vẽ lại một khung hình để đặt vị trí.
   const anchorKey = anchors.map((anchor) => `${anchor.id}:${anchor.x},${anchor.z}`).join("|");
   useEffect(() => invalidate(), [anchorKey, invalidate]);
   useFrame(({ camera, size }) => {
     const point = new Vector3();
     const scale = clamp(camera.zoom / 15, 0.82, 1.1);
-    for (const anchor of anchors) {
+    const spot = markerRef.current;
+    const all = spot?.visible ? [...anchors, { id: MARKER_ID, x: spot.x, y: spot.height + 1.75, z: spot.z }] : anchors;
+    const markerLabel = labels.current.get(MARKER_ID);
+    if (markerLabel && !spot?.visible) place(MARKER_ID, markerLabel, "hidden", "visibility");
+    for (const anchor of all) {
       const element = labels.current.get(anchor.id);
       if (!element) continue;
       point.set(anchor.x, anchor.y, anchor.z).project(camera);
       const inView = Math.abs(point.z) < 1 && Math.abs(point.x) < 1.1 && Math.abs(point.y) < 1.1;
-      element.style.visibility = inView ? "visible" : "hidden";
+      place(anchor.id, element, inView ? "visible" : "hidden", "visibility");
       if (!inView) continue;
       const x = (point.x * 0.5 + 0.5) * size.width;
       const y = (-point.y * 0.5 + 0.5) * size.height;
-      element.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(3)})`;
-      element.style.zIndex = String(Math.max(1, Math.round((1 - point.z) * 500)));
+      place(anchor.id, element, `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${scale.toFixed(3)})`, "transform");
+      place(anchor.id, element, String(Math.max(1, Math.round((1 - point.z) * 500))), "zIndex");
     }
   });
   return null;
@@ -374,8 +407,11 @@ function LabelProjector({ anchors, labels }: { anchors: { id: string; x: number;
 
 /**
  * Cảnh 3D isometric của trung tâm: tòa nhà chính, các phòng học theo `layoutCampus`, sân, đường, cây, robot.
- * Bấm phòng (hoặc nhãn của phòng), hình giáo viên hay hình học viên trước cửa phòng đang học để chọn; mọi thao tác nằm ở các
- * thẻ bên cạnh. Robot là vật trang trí. Màu lấy từ CSS variable của ứng dụng. Chỉ vẽ lại khi có thay đổi (`frameloop="demand"`).
+ * Bấm phòng (hoặc nhãn của phòng), hình giáo viên hay hình học viên trước cửa phòng để chọn; mọi thao tác nằm ở các thẻ bên
+ * cạnh. Người đi tới cửa phòng trước giờ học và ra về sau giờ học theo thời khóa biểu; robot tuần tra theo đường chấm xanh (vật
+ * trang trí); có chùm sao khi một buổi vừa được ghi sao. Màu lấy từ CSS variable của ứng dụng. Cảnh vẽ theo yêu cầu
+ * (`frameloop="demand"`); khi bật chuyển động nền thì được xin vẽ khoảng 30 khung hình/giây lúc tab và cảnh đang hiển thị.
+ * Tắt chuyển động nền khi người dùng bật "giảm chuyển động" hoặc máy yếu.
  */
 export function CenterScene({
   campus,
@@ -385,6 +421,7 @@ export function CenterScene({
   flight,
   marker,
   onPickFigure,
+  stars,
   insets,
   apiRef,
   onReady,
@@ -396,6 +433,8 @@ export function CenterScene({
   flight: SceneFlight | null;
   marker: SceneMarker | null;
   onPickFigure: (roomId: string, kind: "teacher" | "student", index: number) => void;
+  /** Chuỗi JSON của [mã buổi, mã phòng hoặc null, số lần ghi sao][] của các buổi hôm nay. */
+  stars: string;
   insets: SceneInsets;
   apiRef: RefObject<SceneApi | null>;
   /** Gọi khi khung hình đầu tiên đã sẵn sàng (để tắt màn hình chờ). */
@@ -403,12 +442,10 @@ export function CenterScene({
 }) {
   const [theme] = useState(readSceneTheme);
   const [reducedMotion] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  // Máy yếu (ít nhân xử lý hoặc ít bộ nhớ theo trình duyệt báo): tắt bóng đổ và vẽ ở độ phân giải gốc.
-  const [lowEnd] = useState(() => {
-    const device = navigator as Navigator & { deviceMemory?: number };
-    return (device.hardwareConcurrency ?? 8) <= 4 || (device.deviceMemory ?? 8) <= 4;
-  });
+  // Máy yếu (ít nhân xử lý hoặc ít bộ nhớ theo trình duyệt báo): tắt bóng đổ, tắt chuyển động nền và vẽ ở độ phân giải gốc.
+  const [lowEnd] = useState(() => graphics() === "low");
   const shadows = !lowEnd;
+  const animate = !reducedMotion && !lowEnd;
   const placementOf = useMemo(() => new Map(campus.rooms.map((placement) => [placement.id, placement])), [campus]);
   const trees = useMemo(() => treeSpots(campus), [campus]);
   // Điểm bay tới: tâm phòng được chọn; không có phòng (buổi chưa xếp phòng) thì là sảnh tòa nhà chính.
@@ -418,43 +455,44 @@ export function CenterScene({
     return placement ? { x: placement.x, z: placement.z } : { x: campus.main.x, z: campus.main.z + MAIN_DEPTH / 2 + 2 };
   }, [flight, placementOf, campus]);
 
-  const arena = { x: campus.plaza.x + 0.5, z: campus.plaza.z + 0.8 };
-  // Hình người: vài người đứng quanh sa bàn, và trước cửa mỗi phòng đang học là giáo viên cùng nhóm học viên theo sĩ số (tối đa 8).
+  const arena = arenaSpot(campus);
+  // Hình người: vài người đứng quanh sa bàn; với buổi đang ghi trên nhãn của mỗi phòng là giáo viên cùng nhóm học viên theo sĩ số
+  // (tối đa 8), xuất hiện theo giờ của buổi: đi tới cửa trước giờ học, đứng trước cửa trong giờ, ra về sau giờ học.
   const shirts = [theme.gold, theme.goldSoft, theme.teal];
-  const figures: FigureSpot[] = [
-    { x: arena.x - 1.2, z: arena.z - 2.7, color: theme.gold, height: 1.6 },
-    { x: arena.x + 1.4, z: arena.z - 2.8, color: theme.teal, height: 1.6 },
+  const walkers: Walker[] = [
+    { key: "arena|0", spot: { x: arena.x - 1.2, z: arena.z - 3.5 }, color: theme.gold, height: 1.6 },
+    { key: "arena|1", spot: { x: arena.x + 1.4, z: arena.z - 3.6 }, color: theme.teal, height: 1.6 },
   ];
-  let marked: FigureSpot | null = null;
   for (const item of rooms) {
     const placement = placementOf.get(item.room.id);
-    if (!placement || item.state !== "live" || !item.session) continue;
+    if (!placement || !item.session || item.session.timetableOnly) continue;
+    const { session } = item;
     const roomId = item.room.id;
-    const local: (FigureSpot & { kind: "teacher" | "student"; index: number })[] = [];
-    if (item.session.teacherId && item.session.teacherName) {
-      local.push({ x: -1.9, z: ROOM_DEPTH / 2 + 1, color: theme.ink, height: 2, kind: "teacher", index: 0 });
-    }
-    const count = Math.min(item.session.studentCount ?? 0, 8);
+    const add = (kind: "teacher" | "student", index: number, local: Spot, color: string, height: number, order: number) => {
+      const spot = doorSpot(placement, local);
+      walkers.push({ key: `${roomId}|${kind}|${index}`, spot, color, height, order, session, path: walkPath(campus, placement, spot), onPick: () => onPickFigure(roomId, kind, index) });
+    };
+    // Giáo viên tới trước, học viên nối theo sau.
+    if (session.teacherId && session.teacherName) add("teacher", 0, { x: -1.9, z: ROOM_DEPTH / 2 + 1 }, theme.ink, 2, 0);
+    const count = Math.min(session.studentCount ?? 0, 8);
     for (let index = 0; index < count; index++) {
-      local.push({ x: ((index % 4) - 1.5) * 0.85 + 1.2, z: ROOM_DEPTH / 2 + 1.05 + Math.floor(index / 4) * 0.85, color: shirts[index % shirts.length]!, height: 1.55, kind: "student", index });
-    }
-    // Tọa độ riêng của tòa nhà (mặt tiền quay về +Z) đổi sang tọa độ khuôn viên theo hướng cửa.
-    for (const { kind, index, ...spot } of local) {
-      const placed: FigureSpot = {
-        ...spot,
-        ...(placement.facing === "south" ? { x: placement.x + spot.x, z: placement.z + spot.z } : { x: placement.x + spot.z, z: placement.z - spot.x }),
-        onPick: () => onPickFigure(roomId, kind, index),
-      };
-      figures.push(placed);
-      if (marker && marker.roomId === roomId && marker.kind === kind && marker.index === index) marked = placed;
+      add("student", index, { x: ((index % 4) - 1.5) * 0.85 + 1.2, z: ROOM_DEPTH / 2 + 1.05 + Math.floor(index / 4) * 0.85 }, shirts[index % shirts.length]!, 1.55, index + 1);
     }
   }
-  const markedSpot = marked as FigureSpot | null;
-  // Điểm neo của các nhãn HTML: phía trên mái từng phòng, và phía trên đầu hình người đang chọn.
-  const anchors = [
-    ...campus.rooms.map(({ id, x, z }) => ({ id, x, y: ROOM_TOP + 1.25, z })),
-    ...(markedSpot ? [{ id: MARKER_ID, x: markedSpot.x, y: markedSpot.height + 1.75, z: markedSpot.z }] : []),
-  ];
+  const markedKey = marker ? `${marker.roomId}|${marker.kind}|${marker.index}` : null;
+  const markerRef = useRef<MarkerSpot | null>(null);
+  // Điểm neo của nhãn phòng: phía trên mái từng phòng. Nhãn của hình người đang chọn đi theo hình người đó (markerRef).
+  const anchors = campus.rooms.map(({ id, x, z }) => ({ id, x, y: ROOM_TOP + 1.25, z }));
+  const loops = useMemo(() => robotLoops(campus), [campus]);
+  // Nơi chùm sao bay lên khi một buổi vừa được ghi sao: chỗ nhóm học viên đứng trước cửa phòng của buổi; buổi chưa xếp phòng
+  // thì là trước sảnh tòa nhà chính.
+  const starCounts = useMemo(() => JSON.stringify((JSON.parse(stars) as [string, string | null, number][]).map(([id, , count]) => [id, count])), [stars]);
+  const burstPlace = (sessionId: string): BurstPlace | null => {
+    const entry = (JSON.parse(stars) as [string, string | null, number][]).find(([id]) => id === sessionId);
+    if (!entry) return null;
+    const placement = entry[1] ? placementOf.get(entry[1]) : undefined;
+    return placement ? doorSpot(placement, { x: 1.2, z: ROOM_DEPTH / 2 + 1.45 }) : { x: campus.main.x, z: campus.main.z + MAIN_DEPTH / 2 + 2.4 };
+  };
 
   const labels = useRef(new Map<string, HTMLElement>());
   const register = (id: string, element: HTMLElement | null) => {
@@ -474,6 +512,7 @@ export function CenterScene({
         dpr={lowEnd ? 1 : [1, 2]}
         camera={CAMERA}
         onCreated={onReady}
+        role="img"
         aria-label="Mô hình 3D isometric của trung tâm HAXI STEM"
       >
         {/* Ánh sáng mềm, ấm: nắng từ hướng tây nam nên mặt tiền phía nam sáng, bóng đổ nhẹ về đông bắc. */}
@@ -517,12 +556,12 @@ export function CenterScene({
         })}
 
         <Arena x={arena.x} z={arena.z} theme={theme} shadows={shadows} />
-        <Crates x={arena.x + 3.6} z={arena.z + 1.4} theme={theme} shadows={shadows} />
-        <Robot x={arena.x - 3.7} z={arena.z + 1.2} turn={0.9} theme={theme} shadows={shadows} />
-        <Robot x={arena.x + 0.4} z={arena.z + 3.2} turn={0.3} theme={theme} shadows={shadows} />
-        <Robot x={campus.main.x + 3.1} z={campus.main.z + MAIN_DEPTH / 2 + 2.6} turn={0.6} theme={theme} shadows={shadows} />
-        <Figures spots={figures} theme={theme} shadows={shadows} />
-        {markedSpot && <FigureMarker spot={markedSpot} theme={theme} />}
+        <Crates x={arena.x + 4.4} z={arena.z + 1.4} theme={theme} shadows={shadows} />
+        <Patrols loops={loops} theme={theme} shadows={shadows} animate={animate} />
+        <Figures walkers={walkers} theme={theme} shadows={shadows} animate={animate} markedKey={markedKey} markerRef={markerRef} />
+        <StarBursts counts={starCounts} placeOf={burstPlace} theme={theme} animate={animate} />
+        <Pulse active={animate} />
+        <SceneStats />
         <Trees spots={trees} theme={theme} shadows={shadows} />
 
         <OrbitControls
@@ -536,14 +575,14 @@ export function CenterScene({
           maxPolarAngle={1.12}
         />
         <CameraRig campus={campus} insets={insets} apiRef={apiRef} flight={flightTo} animate={!reducedMotion} />
-        <LabelProjector anchors={anchors} labels={labels} />
+        <LabelProjector anchors={anchors} labels={labels} markerRef={markerRef} />
       </Canvas>
       {/* Lớp nhãn HTML phủ trên cảnh: không chặn chuột của cảnh, chỉ các nút nhãn nhận bấm. */}
       <div className="pointer-events-none absolute inset-0 isolate overflow-hidden">
         {rooms.map((item) => (
           <RoomLabel key={item.room.id} item={item} selected={item.room.id === selectedId} onSelect={onSelect} register={register} />
         ))}
-        {marker && markedSpot && (
+        {marker && (
           <p
             ref={(element) => register(MARKER_ID, element)}
             data-scene-marker

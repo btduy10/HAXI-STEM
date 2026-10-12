@@ -8,7 +8,9 @@ import { type CenterData, type CenterRoom, type CenterSession, ROOM_STATE_LABELS
 import { timeNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { centerSearchAction, centerSessionAction, centerStudentAction, centerTeacherAction } from "@/server/actions/center";
+import { CenterFlat } from "./center-flat";
 import type { SceneApi, SceneFlight, SceneInsets, SceneMarker } from "./center-scene";
+import { graphics, readView, subscribeView, writeView } from "./device";
 import { DetailPanel, type Person, type RoomRow, type StagePerms, type WorkspaceTab } from "./detail-panels";
 import { CameraButtons, Kpis, ListsPanel, ProgressPanel, type StageKpi, type TeacherRow } from "./panels";
 import { SessionWorkspace } from "./session-workspace";
@@ -30,17 +32,21 @@ function SceneCover({ children }: { children: ReactNode }) {
   );
 }
 
-/** Máy hoặc trình duyệt không tạo được WebGL: báo ngắn gọn; các thẻ số liệu và danh sách vẫn dùng được. */
-class SceneBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+/** Cảnh 3D gặp lỗi khi dựng (máy hoặc trình duyệt không tạo được WebGL): báo lên để trang chuyển sang giao diện nhẹ. */
+class SceneBoundary extends Component<{ children: ReactNode; onFail: () => void }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {
     return { failed: true };
   }
+  componentDidCatch() {
+    this.props.onFail();
+  }
   render() {
-    if (!this.state.failed) return this.props.children;
-    return <SceneCover>Máy hoặc trình duyệt này không hiển thị được đồ họa 3D. Số liệu và danh sách bên cạnh vẫn dùng được.</SceneCover>;
+    return this.state.failed ? null : this.props.children;
   }
 }
+
+const noSubscription = () => () => {};
 
 function useMedia(query: string) {
   const subscribe = useCallback(
@@ -76,6 +82,8 @@ const fold = (text: string) =>
 
 // Phần cảnh bị thẻ che ở bố cục đầy đủ (từ 1280px): thanh trên cùng hàng thẻ KPI, và cột thẻ bên phải.
 const WIDE_INSETS: SceneInsets = { top: 164, right: 344, bottom: 0, left: 0 };
+// Giao diện nhẹ ở bố cục đầy đủ: sơ đồ 2D nằm gọn giữa thẻ tiến trình (bên trái) và cột nút, cột thẻ (bên phải).
+const WIDE_FLAT_INSETS: SceneInsets = { top: 164, right: 400, bottom: 0, left: 332 };
 // Bố cục 768–1279px: hàng thẻ KPI ở trên và cột nút camera bên phải nổi trên cảnh.
 const COMPACT_INSETS: SceneInsets = { top: 104, right: 60, bottom: 0, left: 0 };
 
@@ -101,6 +109,8 @@ export type StageData = {
  * - Từ 1280px: mọi thẻ nổi trên cảnh, cảnh chiếm trọn màn hình.
  * - 768–1279px: cảnh ở trên (KPI và nút camera nổi), các thẻ còn lại xếp bên dưới.
  * - Dưới 768px: một cột, không dựng cảnh và không tải thư viện 3D.
+ * "Giao diện nhẹ" (sơ đồ 2D, không tải thư viện 3D) thay cho cảnh 3D khi người dùng chọn, khi máy yếu (trừ khi người dùng đã
+ * chọn 3D), và khi trình duyệt không chạy được WebGL.
  * `children`: phần số liệu bên dưới (biểu đồ).
  */
 export function Stage({ data, children }: { data: StageData; children?: ReactNode }) {
@@ -122,6 +132,16 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
   const [query, setQuery] = useState("");
   const [ready, setReady] = useState(false);
   const api = useRef<SceneApi | null>(null);
+  // Chọn giữa cảnh 3D và giao diện nhẹ: lựa chọn của người dùng (lưu trên trình duyệt) → khả năng của máy.
+  const choice = useSyncExternalStore(subscribeView, readView, () => null);
+  const capability = useSyncExternalStore(noSubscription, graphics, () => "full" as const);
+  const [sceneFailed, setSceneFailed] = useState(false);
+  const canUse3d = capability !== "none" && !sceneFailed;
+  const flat = !canUse3d || choice === "flat" || (choice === null && capability === "low");
+  const toggleView = () => {
+    if (flat) setReady(false);
+    writeView(flat ? "3d" : "flat");
+  };
 
   // Tự làm mới: chạy lại trang trên máy chủ (đủ kiểm tra phiên và quyền) và tải lại chi tiết đang mở.
   useEffect(() => {
@@ -136,6 +156,8 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
   // Dấu của dữ liệu trang: đổi là có dữ liệu mới (chip "Live" nháy, chi tiết đang mở tải lại).
   const stamp = useMemo(() => JSON.stringify([center.rooms, center.sessions, data.kpis, data.overdueTotal]), [center.rooms, center.sessions, data.kpis, data.overdueTotal]);
   const version = `${tick}|${stamp}`;
+  // Số lần ghi sao của từng buổi hôm nay, để cảnh 3D biết buổi nào vừa được ghi sao.
+  const starsKey = JSON.stringify(center.sessions.map((item) => [item.id, item.roomId, item.starLogCount]));
   // Mặt bằng chỉ xếp lại khi danh sách phòng thật sự đổi (mỗi lần làm mới trang đều trả về mảng mới).
   const roomsKey = JSON.stringify(center.rooms);
   const campus = useMemo(() => layoutCampus(JSON.parse(roomsKey) as CenterRoom[]), [roomsKey]);
@@ -314,8 +336,9 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
           data-center-scene
           className="relative hidden h-[60dvh] min-h-[26rem] overflow-hidden rounded-3xl border bg-scene-bg md:block xl:absolute xl:inset-0 xl:h-auto xl:min-h-0 xl:rounded-none xl:border-0"
         >
-          {hasScene && (
-            <SceneBoundary>
+          {hasScene && flat && <CenterFlat campus={campus} rooms={rooms} selectedId={room?.room.id ?? null} onSelect={selectRoom} insets={floating ? WIDE_FLAT_INSETS : COMPACT_INSETS} />}
+          {hasScene && !flat && (
+            <SceneBoundary onFail={() => setSceneFailed(true)}>
               <CenterScene
                 campus={campus}
                 rooms={rooms}
@@ -324,6 +347,7 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
                 flight={flight}
                 marker={marker}
                 onPickFigure={pickFigure}
+                stars={starsKey}
                 insets={floating ? WIDE_INSETS : COMPACT_INSETS}
                 apiRef={api}
                 onReady={() => setReady(true)}
@@ -332,9 +356,18 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
             </SceneBoundary>
           )}
           <Kpis items={data.kpis} className="absolute top-3 left-3 z-20 xl:top-[4.75rem]" />
-          <CameraButtons api={api} disabled={!ready} className="absolute top-1/2 right-3 z-20 -translate-y-1/2 xl:right-[21.75rem]" />
+          <CameraButtons
+            api={api}
+            disabled={!ready}
+            flat={flat}
+            canUse3d={canUse3d}
+            onToggleView={toggleView}
+            className="absolute top-1/2 right-3 z-20 -translate-y-1/2 xl:right-[21.75rem]"
+          />
           <p className="pointer-events-none absolute bottom-3 left-1/2 z-20 hidden -translate-x-1/2 rounded-full bg-card/85 px-3 py-1 text-xs whitespace-nowrap text-ink-soft shadow-panel 2xl:block">
-            Kéo để xoay · lăn chuột để phóng to, thu nhỏ · chuột phải để di chuyển · mặt bằng minh họa, không phải mặt bằng thật
+            {flat
+              ? `Giao diện nhẹ${canUse3d ? "" : " (máy này không hiển thị được cảnh 3D)"} · sơ đồ minh họa, không phải mặt bằng thật`
+              : "Kéo để xoay · lăn chuột để phóng to, thu nhỏ · chuột phải để di chuyển · mặt bằng minh họa, không phải mặt bằng thật"}
           </p>
         </div>
 

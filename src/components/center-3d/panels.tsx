@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownRightIcon, ArrowUpRightIcon, CheckIcon, HomeIcon, type LucideIcon, MinusIcon, PlusIcon, RotateCwIcon, ScanIcon } from "lucide-react";
+import { ArrowDownRightIcon, ArrowUpRightIcon, BoxIcon, CheckIcon, HomeIcon, LayoutGridIcon, type LucideIcon, MinusIcon, PlusIcon, RotateCwIcon, ScanIcon } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { CountUp } from "@/components/count-up";
@@ -278,7 +278,7 @@ export function ListsPanel({
             )}
           >
             {item.label}
-            {item.count !== null && <span className="tabular-nums opacity-80">({item.count})</span>}
+            {item.count !== null && <span className="tabular-nums">({item.count})</span>}
           </button>
         ))}
       </div>
@@ -385,8 +385,42 @@ export function ListsPanel({
   );
 }
 
-/** Cột nút tròn điều khiển máy quay của cảnh 3D. */
-export function CameraButtons({ api, disabled, className }: { api: { current: SceneApi | null }; disabled: boolean; className?: string }) {
+/**
+ * Cột nút tròn điều khiển máy quay của cảnh 3D, và nút đổi giữa cảnh 3D với "Giao diện nhẹ" (sơ đồ 2D).
+ * Ở giao diện nhẹ chỉ còn nút đổi giao diện; máy không chạy được 3D thì nút đó bị khóa.
+ */
+export function CameraButtons({
+  api,
+  disabled,
+  className,
+  flat,
+  canUse3d,
+  onToggleView,
+}: {
+  api: { current: SceneApi | null };
+  disabled: boolean;
+  className?: string;
+  flat: boolean;
+  canUse3d: boolean;
+  onToggleView: () => void;
+}) {
+  const round = cn(
+    "grid size-10 place-items-center rounded-full border bg-card text-foreground shadow-panel transition-colors hover:bg-primary hover:text-primary-foreground disabled:opacity-50 disabled:hover:bg-card disabled:hover:text-foreground",
+    focusRing,
+  );
+  const toggleLabel = flat ? (canUse3d ? "Chuyển sang cảnh 3D" : "Máy này không hiển thị được cảnh 3D") : "Chuyển sang giao diện nhẹ";
+  const toggle = (
+    <button type="button" aria-label={toggleLabel} title={toggleLabel} data-view-toggle={flat ? "flat" : "3d"} disabled={flat && !canUse3d} onClick={onToggleView} className={round}>
+      {flat ? <BoxIcon className="size-[1.125rem]" aria-hidden /> : <LayoutGridIcon className="size-[1.125rem]" aria-hidden />}
+    </button>
+  );
+  if (flat) {
+    return (
+      <div role="group" aria-label="Đổi giao diện" className={cn("grid gap-2", className)}>
+        {toggle}
+      </div>
+    );
+  }
   const buttons: { label: string; icon: LucideIcon; run: (scene: SceneApi) => void }[] = [
     { label: "Phóng to", icon: PlusIcon, run: (scene) => scene.zoomIn() },
     { label: "Thu nhỏ", icon: MinusIcon, run: (scene) => scene.zoomOut() },
@@ -404,14 +438,12 @@ export function CameraButtons({ api, disabled, className }: { api: { current: Sc
           title={label}
           disabled={disabled}
           onClick={() => api.current && run(api.current)}
-          className={cn(
-            "grid size-10 place-items-center rounded-full border bg-card text-foreground shadow-panel transition-colors hover:bg-primary hover:text-primary-foreground disabled:opacity-50",
-            focusRing,
-          )}
+          className={round}
         >
           <Icon className="size-[1.125rem]" aria-hidden />
         </button>
       ))}
+      {toggle}
     </div>
   );
 }

@@ -19,7 +19,8 @@ function Disclosure({
   triggerClassName,
   children,
 }: {
-  label: string;
+  /** Tên truy cập của nút khi nút chỉ có biểu tượng; bỏ trống khi phần chữ trong nút đã là tên. */
+  label?: string;
   trigger: ReactNode;
   triggerClassName?: string;
   children: ReactNode;
@@ -261,15 +262,20 @@ export function TopBar({
         </Disclosure>
 
         <Disclosure
-          label={`Tài khoản: ${user.name}, ${user.role}`}
           triggerClassName="hidden h-10 items-center gap-2 rounded-full border bg-card p-1 hover:bg-primary-soft md:flex lg:pr-3"
           trigger={
             <>
               <span aria-hidden className="grid size-8 place-items-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
                 {initial}
               </span>
+              {/* Tên truy cập "Tài khoản: tên, vai trò": màn hình hẹp đọc từ dòng ẩn, màn hình rộng đọc chính phần chữ đang hiện. */}
+              <span className="sr-only">Tài khoản: </span>
+              <span className="sr-only lg:hidden">{`${user.name}, ${user.role}`}</span>
               <span className="hidden max-w-36 text-left leading-tight lg:grid">
-                <span className="truncate text-sm font-medium">{user.name}</span>
+                <span className="truncate text-sm font-medium">
+                  {user.name}
+                  <span className="sr-only">, </span>
+                </span>
                 <span className="truncate text-xs text-ink-soft">{user.role}</span>
               </span>
             </>

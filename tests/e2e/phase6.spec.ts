@@ -110,6 +110,8 @@ test("Tổng quan kiểu dashboard 3D nối dữ liệu thật: điện thoại 
   try {
     const threeScripts: string[] = [];
     page.on("request", (request) => request.resourceType() === "script" && /three/i.test(request.url()) && threeScripts.push(request.url()));
+    // Chọn sẵn cảnh 3D: máy chạy kiểm thử ít nhân xử lý thì mặc định là giao diện nhẹ.
+    await page.addInitScript(() => window.localStorage.setItem("haxi.dashboard.view", "3d"));
     await login(page, "admin", NEW_PASSWORD);
     await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
     await page.getByRole("button", { name: "Xác nhận" }).click();
@@ -187,7 +189,8 @@ test("Tổng quan kiểu dashboard 3D nối dữ liệu thật: điện thoại 
     await expect(card.getByRole("link", { name: "Mở buổi học" })).toHaveAttribute("href", `/admin/sessions/${other.sessionId}`);
     await expect(detail.locator(`[data-student="${other.studentName}"]`)).toContainText("HV001 · Chưa điểm danh");
     // Nhãn của phòng trong cảnh là nút thật: cùng trạng thái, đang được chọn.
-    const label = scene.getByRole("button", { name: "Phòng 3D E2E: Đang học, Lớp thử 3D" });
+    // Tên truy cập của nhãn gồm phần chữ đang hiện, thêm trạng thái cho trình đọc màn hình.
+    const label = scene.getByRole("button", { name: /^Phòng 3D E2E ?: Đang học, Lớp thử 3D/ });
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute("aria-pressed", "true");
     // Thẻ tiến trình đổi sang năm bước của buổi đang chọn.
@@ -295,6 +298,7 @@ test("Tổng quan kiểu dashboard 3D nối dữ liệu thật: điện thoại 
 
     // Giáo viên gv.lan (phạm vi lớp của mình): thấy phòng, nhưng không thấy lớp, giáo viên hay học viên của lớp không phải của mình.
     const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    await context.addInitScript(() => window.localStorage.setItem("haxi.dashboard.view", "3d"));
     const teacherPage = await context.newPage();
     teacherPage.on("pageerror", (error) => pageErrors.push(String(error)));
     await login(teacherPage, "gv.lan", NEW_PASSWORD);
@@ -354,6 +358,129 @@ test("Tổng quan kiểu dashboard 3D nối dữ liệu thật: điện thoại 
     });
     await db`delete from classes where code in ('3D-E2E', '3D-E2E2')`;
     await db`delete from rooms where name in ('Phòng 3D E2E', 'Phòng 3D Lan')`;
+    await db.end();
+  }
+});
+
+test("Cảnh 3D sống và giao diện nhẹ: chuyển động nền, tắt khi giảm chuyển động, rê chuột đổi con trỏ, chùm sao khi buổi được ghi sao, đổi sang sơ đồ 2D không tải thư viện 3D, tự dùng giao diện nhẹ khi WebGL lỗi", async ({ page, browser }) => {
+  test.setTimeout(300_000);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
+
+  // Một phòng có buổi kéo dài cả ngày hôm nay (luôn "đang học"), lớp có 1 học viên.
+  const db = sql();
+  const [base] = await db`select course_id from classes where code = 'RB-CB01'`;
+  const [room] = await db`insert into rooms (name, capacity) values ('Phòng Sống E2E', 8) returning id`;
+  const [cls] = await db`
+    insert into classes (code, name, course_id, default_room_id, start_date, end_date, max_size)
+    values ('LIVE-E2E', 'Lớp cảnh sống', ${base!.course_id}, ${room!.id}, ${today}, ${today}, 8) returning id`;
+  const [student] = await db`select id from students where code = 'HV003'`;
+  await db`insert into enrollments (class_id, student_id, joined_at) values (${cls!.id}, ${student!.id}, ${today})`;
+  const [teacher] = await db`select id from teachers where code = 'GV02'`;
+  const [held] = await db`
+    insert into sessions (class_id, date, start_time, end_time, room_id, teacher_id)
+    values (${cls!.id}, ${today}, '00:00', '23:59', ${room!.id}, ${teacher!.id}) returning id`;
+
+  try {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.addInitScript(() => window.localStorage.getItem("haxi.dashboard.view") ?? window.localStorage.setItem("haxi.dashboard.view", "3d"));
+    await login(page, "admin", NEW_PASSWORD);
+    await page.getByLabel("Mã xác thực").fill(totp(loadAdminSecret()));
+    await page.getByRole("button", { name: "Xác nhận" }).click();
+    await expect(page).toHaveURL(/\/admin\/dashboard$/);
+    const scene = page.locator("[data-center-scene]");
+    const canvas = scene.locator("canvas");
+    await expect(canvas).toBeVisible({ timeout: 60_000 });
+    await expect(scene.getByRole("status")).toHaveCount(0, { timeout: 60_000 });
+    const frames = () => canvas.evaluate((element) => Number((element as HTMLElement).dataset.frames ?? 0));
+
+    // Chuyển động nền (robot tuần tra, người đi lại): cảnh được vẽ liên tục.
+    await page.waitForTimeout(1500);
+    const before = await frames();
+    await page.waitForTimeout(2500);
+    expect((await frames()) - before, "số khung hình vẽ trong 2,5 giây khi có chuyển động nền").toBeGreaterThan(5);
+
+    // Rê chuột vào một đối tượng bấm được của cảnh: con trỏ thành bàn tay; rời ra thì trả lại.
+    const area = (await canvas.boundingBox())!;
+    let pointer = false;
+    for (let x = area.x + 180; x < area.x + area.width - 380 && !pointer; x += 36) {
+      for (let y = area.y + 190; y < area.y + area.height - 60 && !pointer; y += 36) {
+        await page.mouse.move(x, y);
+        pointer = (await page.evaluate(() => document.body.style.cursor)) === "pointer";
+      }
+    }
+    expect(pointer, "rê chuột vào phòng hoặc hình người thì con trỏ đổi dạng").toBe(true);
+    await page.mouse.move(area.x + 4, area.y + area.height - 4);
+    await expect.poll(() => page.evaluate(() => document.body.style.cursor)).toBe("");
+
+    // Buổi vừa được ghi sao (ở đây: ghi từ nơi khác) thì lần làm mới kế tiếp cảnh bật chùm sao.
+    expect(await canvas.getAttribute("data-star-bursts")).toBeNull();
+    await db`insert into star_logs (session_id, student_id, stars) values (${held!.id}, ${student!.id}, 2)`;
+    await expect(canvas).toHaveAttribute("data-star-bursts", "1", { timeout: 45_000 });
+
+    // Đổi sang giao diện nhẹ: sơ đồ 2D thay cho canvas; chọn phòng vẫn mở thẻ lớp; lựa chọn được nhớ sau khi tải lại.
+    await page.getByRole("button", { name: "Chuyển sang giao diện nhẹ" }).click();
+    const flat = page.locator("[data-center-flat]");
+    await expect(flat.getByRole("group", { name: "Sơ đồ trung tâm (giao diện nhẹ)" })).toBeVisible();
+    await expect(page.locator("canvas")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Phóng to", exact: true })).toHaveCount(0);
+    const flatRoom = flat.locator('[data-flat-room="Phòng Sống E2E"]');
+    await expect(flatRoom).toHaveAttribute("data-state", "live");
+    await flatRoom.click();
+    await expect(flatRoom).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-detail-panel] [data-class-detail="Lớp cảnh sống"]')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    const threeScripts: string[] = [];
+    page.on("request", (request) => request.resourceType() === "script" && /three/i.test(request.url()) && threeScripts.push(request.url()));
+    await page.reload();
+    await expect(flat).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator("canvas")).toHaveCount(0);
+    expect(threeScripts, "giao diện nhẹ không tải thư viện 3D").toEqual([]);
+    await page.screenshot({ path: "test-results/shots/stage-flat-1366.png" });
+    // Đổi lại cảnh 3D.
+    await page.getByRole("button", { name: "Chuyển sang cảnh 3D" }).click();
+    await expect(canvas).toBeVisible({ timeout: 60_000 });
+    await expect(flat).toHaveCount(0);
+
+    // Giảm chuyển động: không có chuyển động nền, cảnh đứng yên thì không vẽ khung nào.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.reload();
+    await expect(canvas).toBeVisible({ timeout: 60_000 });
+    await expect(scene.getByRole("status")).toHaveCount(0, { timeout: 60_000 });
+    await page.waitForTimeout(3000);
+    const still = await frames();
+    await page.waitForTimeout(3000);
+    expect((await frames()) - still, "số khung hình vẽ trong 3 giây khi bật giảm chuyển động").toBe(0);
+
+    // Trình duyệt không tạo được WebGL: trang tự dùng giao diện nhẹ, nút đổi sang 3D bị khóa, mọi thẻ vẫn dùng được.
+    const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    await context.addInitScript(() => {
+      const original = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+        return /webgl/i.test(kind) ? null : (original as (...args: unknown[]) => unknown).call(this, kind, ...rest);
+      } as typeof original;
+      window.localStorage.setItem("haxi.dashboard.view", "3d");
+    });
+    const blocked = await context.newPage();
+    blocked.on("pageerror", (error) => pageErrors.push(String(error)));
+    await login(blocked, "gv.lan", NEW_PASSWORD);
+    await expect(blocked).toHaveURL(/\/teacher\/dashboard$/);
+    await expect(blocked.locator("[data-center-flat]")).toBeVisible();
+    await expect(blocked.locator("canvas")).toHaveCount(0);
+    await expect(blocked.getByRole("button", { name: "Máy này không hiển thị được cảnh 3D" })).toBeDisabled();
+    await expect(blocked.locator("[data-detail-panel]")).toBeVisible();
+    await context.close();
+
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await db.begin(async (tx) => {
+      await tx`select set_config('haxi.star_logs_admin_delete', 'on', true)`;
+      await tx`delete from star_logs where session_id = ${held!.id}`;
+    });
+    await db`delete from classes where code = 'LIVE-E2E'`;
+    await db`delete from rooms where name = 'Phòng Sống E2E'`;
     await db.end();
   }
 });

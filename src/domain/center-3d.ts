@@ -244,3 +244,94 @@ export function kpiDelta(current: number | null, previous: number | null): KpiDe
   const diff = Math.round((current - previous) * 10) / 10;
   return { direction: diff > 0 ? "up" : diff < 0 ? "down" : "flat", diff: Math.abs(diff) };
 }
+
+// ---------- Chuyển động theo thời khóa biểu ----------
+
+/** Quãng thời gian đi bộ: học viên và giáo viên tới cửa phòng trong 3 phút trước giờ học, rời đi trong 3 phút sau giờ học. */
+export const WALK_SECONDS = 180;
+
+export type SessionPhase = { phase: "arriving" | "live" | "leaving"; /** Phần đã qua của giai đoạn, từ 0 đến 1. */ t: number };
+
+/**
+ * Giai đoạn của một buổi lúc `nowSeconds` (số giây từ đầu ngày, giờ Việt Nam): đang tới (WALK_SECONDS trước giờ bắt đầu),
+ * trong giờ, đang về (WALK_SECONDS sau giờ kết thúc). Ngoài các quãng đó và với buổi đã hủy: null (không có ai trước cửa).
+ */
+export function sessionPhase(session: Pick<CenterSession, "startTime" | "endTime" | "cancelled">, nowSeconds: number): SessionPhase | null {
+  if (session.cancelled) return null;
+  const start = minutesOf(session.startTime) * 60;
+  const end = minutesOf(session.endTime) * 60;
+  if (nowSeconds >= start && nowSeconds < end) return { phase: "live", t: end > start ? (nowSeconds - start) / (end - start) : 1 };
+  if (nowSeconds >= start - WALK_SECONDS && nowSeconds < start) return { phase: "arriving", t: (nowSeconds - (start - WALK_SECONDS)) / WALK_SECONDS };
+  if (nowSeconds >= end && nowSeconds < end + WALK_SECONDS) return { phase: "leaving", t: (nowSeconds - end) / WALK_SECONDS };
+  return null;
+}
+
+export type PathPoint = { x: number; z: number };
+
+/** Lối đi nằm trong sân, cách mép sân phía các dãy nhà một khoảng này (tránh người đang đứng trước cửa và cây ở góc sân). */
+export const LANE_INSET = 2.8;
+
+/** Chỗ đứng trước cửa một phòng, đổi từ tọa độ riêng của tòa nhà (mặt tiền quay về +Z) sang tọa độ khuôn viên. */
+export function doorSpot(placement: BuildingPlacement, local: PathPoint): PathPoint {
+  return placement.facing === "south" ? { x: placement.x + local.x, z: placement.z + local.z } : { x: placement.x + local.z, z: placement.z - local.x };
+}
+
+/**
+ * Lộ trình đi bộ từ cổng tới chỗ đứng `slot` trước cửa một phòng. Phòng dãy bắc: vào từ đường phía đông, đi dọc lối phía bắc
+ * của sân rồi rẽ vào cửa. Phòng dãy tây: vào từ đường phía nam, đi dọc lối phía tây của sân rồi rẽ vào cửa.
+ * Lộ trình chỉ gồm các đoạn thẳng song song với trục, nằm trong sân và lối đi trước cửa (không cắt qua tòa nhà nào).
+ */
+export function walkPath(campus: Campus, placement: BuildingPlacement, slot: PathPoint): PathPoint[] {
+  const { plaza } = campus;
+  if (placement.facing === "south") {
+    const lane = plaza.z - plaza.depth / 2 + LANE_INSET;
+    return [{ x: plaza.x + plaza.width / 2 + 0.6, z: lane }, { x: slot.x, z: lane }, slot];
+  }
+  const lane = plaza.x - plaza.width / 2 + LANE_INSET;
+  return [{ x: lane, z: plaza.z + plaza.depth / 2 + 0.6 }, { x: lane, z: slot.z }, slot];
+}
+
+/** Vòng lộ trình hình chữ nhật (đi hết bốn cạnh rồi về điểm đầu) cho robot tuần tra. */
+export function loopPath(rect: Rect): PathPoint[] {
+  const [minX, maxX, minZ, maxZ] = [rect.x - rect.width / 2, rect.x + rect.width / 2, rect.z - rect.depth / 2, rect.z + rect.depth / 2];
+  return [{ x: minX, z: minZ }, { x: maxX, z: minZ }, { x: maxX, z: maxZ }, { x: minX, z: maxZ }, { x: minX, z: minZ }];
+}
+
+export const pathLength = (path: PathPoint[]) => path.slice(1).reduce((sum, point, index) => sum + Math.hypot(point.x - path[index]!.x, point.z - path[index]!.z), 0);
+
+/**
+ * Điểm trên lộ trình sau khi đi được phần `t` (0–1) của tổng quãng đường, và hướng đang đi (góc quay quanh trục đứng,
+ * 0 = nhìn về +Z). Đi đều theo quãng đường, không theo số đoạn.
+ */
+export function pointOnPath(path: PathPoint[], t: number): PathPoint & { heading: number } {
+  const first = path[0] ?? { x: 0, z: 0 };
+  let left = Math.min(1, Math.max(0, t)) * pathLength(path);
+  let heading = 0;
+  for (let index = 1; index < path.length; index++) {
+    const [from, to] = [path[index - 1]!, path[index]!];
+    const length = Math.hypot(to.x - from.x, to.z - from.z);
+    if (length === 0) continue;
+    heading = Math.atan2(to.x - from.x, to.z - from.z);
+    if (left <= length) return { x: from.x + ((to.x - from.x) * left) / length, z: from.z + ((to.z - from.z) * left) / length, heading };
+    left -= length;
+  }
+  const last = path.at(-1) ?? first;
+  return { x: last.x, z: last.z, heading };
+}
+
+/** Tâm sa bàn thi đấu ở giữa sân. */
+export const arenaSpot = (campus: Campus): PathPoint => ({ x: campus.plaza.x + 0.5, z: campus.plaza.z + 0.8 });
+
+/** Các vòng tuần tra của ba robot trang trí: dọc mép nam của sân, dọc mép đông của sân, và quanh sa bàn. */
+export function robotLoops(campus: Campus): Rect[] {
+  const { plaza } = campus;
+  const arena = arenaSpot(campus);
+  const [maxX, minZ, maxZ] = [plaza.x + plaza.width / 2, plaza.z - plaza.depth / 2, plaza.z + plaza.depth / 2];
+  const eastFrom = minZ + LANE_INSET + 1.4;
+  const eastTo = Math.max(eastFrom + 2, plaza.z + 1);
+  return [
+    { x: plaza.x + 0.4, z: maxZ - 2.1, width: plaza.width - 7.6, depth: 1 },
+    { x: maxX - 1.5, z: (eastFrom + eastTo) / 2, width: 0.8, depth: eastTo - eastFrom },
+    { x: arena.x, z: arena.z, width: 6.6, depth: 5.2 },
+  ];
+}
