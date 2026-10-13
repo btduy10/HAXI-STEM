@@ -373,7 +373,8 @@ export function AppShell({
         </SheetContent>
       </Sheet>
 
-      <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-white px-3 md:hidden print:hidden">
+      {/* z-40: khung của nút tài khoản phải nằm trên thanh trên của trang Tổng quan (z-30) ở ngay bên dưới. */}
+      <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-white px-3 md:hidden print:hidden">
         <SheetTrigger handle={menu} render={<Button variant="ghost" size="icon" aria-label="Mở menu" />}>
           <MenuIcon />
         </SheetTrigger>

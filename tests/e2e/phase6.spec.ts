@@ -143,8 +143,21 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là
   await expect(drawer.getByText("Đăng xuất")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(drawer).toHaveCount(0);
-  await page.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ }).click();
-  await expect(page.getByRole("link", { name: "Đổi mật khẩu" })).toBeVisible();
+  // Ở Tổng quan khung tài khoản nằm trên thanh Live ngay bên dưới: cả hai mục đều bấm được (không bị che).
+  await page.goto("/admin/dashboard");
+  await expect(page.locator("[data-live-chip]")).toBeVisible();
+  await expect(async () => {
+    await page.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ }).click();
+    await expect(page.getByRole("link", { name: "Đổi mật khẩu" })).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  const topmost = (name: string) =>
+    page.evaluate((text) => {
+      const row = [...document.querySelectorAll("header a, header button")].find((element) => element.textContent?.trim() === text)!;
+      const box = row.getBoundingClientRect();
+      return row.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+    }, name);
+  expect(await topmost("Đổi mật khẩu")).toBe(true);
+  expect(await topmost("Đăng xuất")).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   await page.getByRole("button", { name: "Đăng xuất" }).click();
   await expect(page).toHaveURL(/\/login$/);
