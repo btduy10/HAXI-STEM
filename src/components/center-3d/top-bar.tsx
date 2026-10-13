@@ -1,75 +1,15 @@
 "use client";
 
-import { BellIcon, Building2Icon, KeyRoundIcon, LogOutIcon, SearchIcon } from "lucide-react";
+import { BellIcon, Building2Icon, SearchIcon } from "lucide-react";
 import Link from "next/link";
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
+import { AccountMenu, Disclosure, disclosureRowClass as rowClass } from "@/components/account-menu";
 import { BrandLogo } from "@/components/brand-logo";
-import { authClient } from "@/lib/auth-client";
-import { hardNavigate } from "@/lib/navigate";
 import { cn } from "@/lib/utils";
 
 /** Một kết quả tìm kiếm; `key` cho biết loại và mã của đối tượng ("room|…", "session|…", "teacher|…", "student|…"). */
 export type SearchResult = { key: string; title: string; detail: string };
 export type OverdueItem = { id: string; title: string; detail: string; href: string; locked: boolean };
-
-/** Nút mở một khung nhỏ bên dưới (thông báo, tài khoản). Đóng khi bấm ra ngoài, nhấn Escape hoặc chọn một mục bên trong. */
-function Disclosure({
-  label,
-  trigger,
-  triggerClassName,
-  children,
-}: {
-  /** Tên truy cập của nút khi nút chỉ có biểu tượng; bỏ trống khi phần chữ trong nút đã là tên. */
-  label?: string;
-  trigger: ReactNode;
-  triggerClassName?: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-  return (
-    <div ref={root} className="relative">
-      <button
-        type="button"
-        aria-label={label}
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((value) => !value)}
-        className={cn("outline-none focus-visible:ring-3 focus-visible:ring-ring/50", triggerClassName)}
-      >
-        {trigger}
-      </button>
-      {open && (
-        // Bấm một đường dẫn hoặc nút bên trong thì đóng khung.
-        <div
-          id={panelId}
-          onClick={(event) => (event.target as HTMLElement).closest("a, button") && setOpen(false)}
-          className="panel absolute top-full right-0 z-40 mt-2 grid w-72 max-w-[calc(100vw-1.5rem)] gap-1 p-2 text-sm"
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const rowClass = "flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 text-left outline-none hover:bg-primary-soft focus-visible:ring-3 focus-visible:ring-ring/50";
 
 /**
  * Thanh trên của dashboard: logo và tên cơ sở, ô tìm kiếm (phím tắt "/"), chip "Live" kèm đồng hồ, chuông báo buổi quá hạn
@@ -149,11 +89,6 @@ export function TopBar({
       { duration: 900, iterations: 2, easing: "ease-out" },
     );
   }, [pulse]);
-  const initial = user.name.trim().charAt(0).toUpperCase() || "?";
-  async function signOut() {
-    await authClient.signOut();
-    hardNavigate("/login");
-  }
 
   return (
     <header className={cn("panel flex min-h-14 items-center gap-3 px-3 py-2", className)}>
@@ -261,35 +196,7 @@ export function TopBar({
           )}
         </Disclosure>
 
-        <Disclosure
-          triggerClassName="hidden h-10 items-center gap-2 rounded-full border bg-card p-1 hover:bg-primary-soft md:flex lg:pr-3"
-          trigger={
-            <>
-              <span aria-hidden className="grid size-8 place-items-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-                {initial}
-              </span>
-              {/* Tên truy cập "Tài khoản: tên, vai trò": màn hình hẹp đọc từ dòng ẩn, màn hình rộng đọc chính phần chữ đang hiện. */}
-              <span className="sr-only">Tài khoản: </span>
-              <span className="sr-only lg:hidden">{`${user.name}, ${user.role}`}</span>
-              <span className="hidden max-w-36 text-left leading-tight lg:grid">
-                <span className="truncate text-sm font-medium">
-                  {user.name}
-                  <span className="sr-only">, </span>
-                </span>
-                <span className="truncate text-xs text-ink-soft">{user.role}</span>
-              </span>
-            </>
-          }
-        >
-          <Link href="/change-password" className={rowClass}>
-            <KeyRoundIcon className="size-4" aria-hidden />
-            Đổi mật khẩu
-          </Link>
-          <button type="button" onClick={signOut} className={cn(rowClass, "w-full")}>
-            <LogOutIcon className="size-4" aria-hidden />
-            Đăng xuất
-          </button>
-        </Disclosure>
+        <AccountMenu name={user.name} role={user.role} className="hidden md:flex" />
       </div>
     </header>
   );

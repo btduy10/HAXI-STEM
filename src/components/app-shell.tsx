@@ -14,10 +14,8 @@ import {
   ClipboardListIcon,
   GiftIcon,
   GraduationCapIcon,
-  KeyRoundIcon,
   LayoutDashboardIcon,
   ListOrderedIcon,
-  LogOutIcon,
   type LucideIcon,
   MenuIcon,
   SchoolIcon,
@@ -28,14 +26,16 @@ import {
   UserCogIcon,
   UsersIcon,
 } from "lucide-react";
+import { Dialog } from "@base-ui/react/dialog";
+import { Popover } from "@base-ui/react/popover";
+import { Tooltip } from "@base-ui/react/tooltip";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLayoutEffect, useRef, useState } from "react";
+import { AccountMenu } from "@/components/account-menu";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { authClient } from "@/lib/auth-client";
-import { hardNavigate } from "@/lib/navigate";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
@@ -92,26 +92,21 @@ const NAV: { admin: NavEntry[]; teacher: NavItem[] } = {
   ],
 };
 
-// Dải icon: ẩn nhãn, canh icon vào giữa; nhãn vẫn còn cho trình đọc màn hình và làm chú thích.
-// "auto": chỉ ở tablet (768–1279px). "always": ở mọi bề rộng từ 768px, dùng cho trang Tổng quan kiểu dashboard 3D
-// (nhường chỗ cho cảnh 3D).
-type Rail = "auto" | "always";
-const RAIL = {
-  item: { auto: "md:max-xl:justify-center md:max-xl:px-0", always: "md:justify-center md:px-0" },
-  label: { auto: "md:max-xl:sr-only", always: "md:sr-only" },
-  hidden: { auto: "md:max-xl:hidden", always: "md:hidden" },
-  groupOpen: { auto: "md:max-xl:bg-sidebar-accent", always: "md:bg-sidebar-accent" },
-  children: { auto: "md:max-xl:ml-0 md:max-xl:border-l-0 md:max-xl:pl-0", always: "md:ml-0 md:border-l-0 md:pl-0" },
-  brand: { auto: "md:max-xl:justify-center md:max-xl:px-1", always: "md:justify-center md:px-1" },
-  brandLogo: { auto: "md:max-xl:w-12", always: "md:w-12" },
-} as const;
 const isStage = (pathname: string) => pathname.endsWith("/dashboard");
 
+const itemClass = "relative flex min-h-11 items-center gap-3 rounded-full px-4 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-sidebar-ring/60";
+// Dải icon: ẩn nhãn, canh icon vào giữa; nhãn vẫn còn cho trình đọc màn hình, và hiện ra trong khung nổi khi rê chuột.
+const railItemClass = "justify-center px-0";
+// Khung nổi bên phải dải icon (tên mục, menu con của nhóm): cùng màu với thanh điều hướng.
+const flyoutClass =
+  "rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-lg outline-none transition-opacity duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0 motion-reduce:transition-none";
+
 // Chỉ tải trước trang khi người dùng rê chuột/chạm vào mục menu, thay vì tải trước cả menu ở mỗi lần mở trang.
-function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: boolean; onNavigate?: () => void; rail?: Rail }) {
+// `rail`: mục chỉ có icon trong dải icon, rê chuột hoặc Tab tới thì tên mục hiện ở bên phải.
+function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: boolean; onNavigate?: () => void; rail?: boolean }) {
   const [intent, setIntent] = useState(false);
   const { href, label, icon: Icon } = item;
-  return (
+  const link = (
     <Link
       href={href}
       prefetch={intent ? null : false}
@@ -120,34 +115,38 @@ function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: bo
       onFocus={() => setIntent(true)}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
-      title={rail ? label : undefined}
       className={cn(
-        "relative flex min-h-11 items-center gap-3 rounded-full px-4 text-sm font-medium transition-colors",
+        itemClass,
+        "font-medium",
         // Khi pill trượt đã định vị xong (data-pill="on") thì nền của mục đang chọn do pill đảm nhận.
         active
           ? "bg-sidebar-primary font-semibold text-sidebar-primary-foreground group-data-[pill=on]/nav:bg-transparent"
           : "hover:bg-sidebar-accent",
-        rail && RAIL.item[rail],
+        rail && railItemClass,
       )}
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      <span className={cn(rail && RAIL.label[rail])}>{label}</span>
+      <span className={cn(rail && "sr-only")}>{label}</span>
     </Link>
+  );
+  if (!rail) return link;
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger render={link} />
+      <Tooltip.Portal>
+        <Tooltip.Positioner side="right" sideOffset={10} className="z-50">
+          {/* Tên mục đã có trong đường dẫn (sr-only) nên khung nổi không đọc lại lần nữa. */}
+          <Tooltip.Popup aria-hidden data-nav-tip className={cn(flyoutClass, "px-3 py-1.5 text-sm font-medium")}>
+            {label}
+          </Tooltip.Popup>
+        </Tooltip.Positioner>
+      </Tooltip.Portal>
+    </Tooltip.Root>
   );
 }
 
-// Nhóm menu bấm để mở/đóng; tự mở khi trang hiện tại thuộc nhóm.
-function NavGroup({
-  group,
-  pathname,
-  onNavigate,
-  rail,
-}: {
-  group: NavGroupItem;
-  pathname: string;
-  onNavigate?: () => void;
-  rail?: Rail;
-}) {
+// Nhóm menu trong menu đầy đủ: bấm để mở/đóng; tự mở khi trang hiện tại thuộc nhóm.
+function NavGroup({ group, pathname, onNavigate }: { group: NavGroupItem; pathname: string; onNavigate?: () => void }) {
   const containsActive = group.children.some((item) => isActive(pathname, item.href));
   const [open, setOpen] = useState(containsActive);
   const [lastPath, setLastPath] = useState(pathname);
@@ -161,23 +160,17 @@ function NavGroup({
       <button
         type="button"
         aria-expanded={open}
-        title={rail ? group.label : undefined}
         onClick={() => setOpen((value) => !value)}
-        className={cn(
-          "relative flex min-h-11 items-center gap-3 rounded-full px-4 text-left text-sm transition-colors hover:bg-sidebar-accent",
-          containsActive ? "font-semibold" : "font-medium",
-          rail && RAIL.item[rail],
-          rail && open && RAIL.groupOpen[rail],
-        )}
+        className={cn(itemClass, "text-left hover:bg-sidebar-accent", containsActive ? "font-semibold" : "font-medium")}
       >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className={cn("flex-1", rail && RAIL.label[rail])}>{group.label}</span>
-        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-180", rail && RAIL.hidden[rail])} aria-hidden />
+        <span className="flex-1">{group.label}</span>
+        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-180")} aria-hidden />
       </button>
       {open && (
-        <div className={cn("ml-4 grid gap-1 border-l border-sidebar-border pl-2", rail && RAIL.children[rail])}>
+        <div className="ml-4 grid gap-1 border-l border-sidebar-border pl-2">
           {group.children.map((item) => (
-            <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={onNavigate} rail={rail} />
+            <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={onNavigate} />
           ))}
         </div>
       )}
@@ -185,13 +178,54 @@ function NavGroup({
   );
 }
 
-function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?: () => void; rail?: Rail }) {
+// Nhóm menu trong dải icon: rê chuột hoặc bấm vào icon thì menu con (tên nhóm và các mục có chữ) hiện ở bên phải.
+// Icon nhóm được tô khi trang hiện tại thuộc nhóm.
+function RailGroup({ group, pathname }: { group: NavGroupItem; pathname: string }) {
+  const containsActive = group.children.some((item) => isActive(pathname, item.href));
+  const [open, setOpen] = useState(false);
+  const [lastPath, setLastPath] = useState(pathname);
+  if (lastPath !== pathname) {
+    setLastPath(pathname);
+    setOpen(false);
+  }
+  const Icon = group.icon;
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger
+        openOnHover
+        delay={80}
+        closeDelay={150}
+        className={cn(
+          itemClass,
+          railItemClass,
+          containsActive ? "bg-sidebar-primary font-semibold text-sidebar-primary-foreground" : "font-medium hover:bg-sidebar-accent data-popup-open:bg-sidebar-accent",
+        )}
+      >
+        <Icon className="size-4 shrink-0" aria-hidden />
+        <span className="sr-only">{group.label}</span>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner side="right" align="start" sideOffset={10} className="z-50">
+          <Popover.Popup data-nav-flyout={group.label} className={cn(flyoutClass, "grid w-56 gap-1 p-2")}>
+            <Popover.Title className="px-4 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">{group.label}</Popover.Title>
+            {group.children.map((item) => (
+              <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={() => setOpen(false)} />
+            ))}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?: () => void; rail?: boolean }) {
   const pathname = usePathname();
   const navRef = useRef<HTMLElement>(null);
   const pillRef = useRef<HTMLSpanElement>(null);
 
   // Pill teal trượt tới mục đang chọn: đo vị trí rồi chỉ đổi transform. Đo lại khi đổi trang
-  // hoặc khi menu đổi kích thước (mở/đóng nhóm, đổi cỡ màn hình).
+  // hoặc khi menu đổi kích thước (mở/đóng nhóm, đổi cỡ màn hình). Trong dải icon, mục con của nhóm không nằm
+  // trong dải nên pill ẩn và icon nhóm tự tô.
   useLayoutEffect(() => {
     const nav = navRef.current;
     const pill = pillRef.current;
@@ -224,7 +258,7 @@ function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?:
     return () => observer.disconnect();
   }, [pathname]);
 
-  return (
+  const nav = (
     <nav ref={navRef} className="group/nav relative grid gap-1 p-2">
       <span
         ref={pillRef}
@@ -232,49 +266,25 @@ function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?:
         className="pointer-events-none absolute top-0 left-0 rounded-full bg-sidebar-primary opacity-0 shadow-[0_6px_16px_-8px_var(--sidebar-primary)] transition-transform duration-300 ease-out motion-reduce:transition-none"
       />
       {items.map((entry) =>
-        isGroup(entry) ? (
-          <NavGroup key={entry.label} group={entry} pathname={pathname} onNavigate={onNavigate} rail={rail} />
-        ) : (
+        !isGroup(entry) ? (
           <NavLink key={entry.href} item={entry} active={isActive(pathname, entry.href)} onNavigate={onNavigate} rail={rail} />
+        ) : rail ? (
+          <RailGroup key={entry.label} group={entry} pathname={pathname} />
+        ) : (
+          <NavGroup key={entry.label} group={entry} pathname={pathname} onNavigate={onNavigate} />
         ),
       )}
     </nav>
   );
-}
-
-function AccountLinks({ userName, rail }: { userName: string; rail?: Rail }) {
-  async function signOut() {
-    await authClient.signOut();
-    hardNavigate("/login");
-  }
-  return (
-    <div className="grid gap-1 border-t border-sidebar-border p-2">
-      <p className={cn("truncate px-4 py-1 text-xs text-sidebar-foreground/70", rail && RAIL.hidden[rail])}>{userName}</p>
-      <Link
-        href="/change-password"
-        title={rail ? "Đổi mật khẩu" : undefined}
-        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL.item[rail])}
-      >
-        <KeyRoundIcon className="size-4 shrink-0" aria-hidden />
-        <span className={cn(rail && RAIL.label[rail])}>Đổi mật khẩu</span>
-      </Link>
-      <button
-        type="button"
-        onClick={signOut}
-        title={rail ? "Đăng xuất" : undefined}
-        className={cn("flex min-h-11 items-center gap-3 rounded-full px-4 text-left text-sm transition-colors hover:bg-sidebar-accent", rail && RAIL.item[rail])}
-      >
-        <LogOutIcon className="size-4 shrink-0" aria-hidden />
-        <span className={cn(rail && RAIL.label[rail])}>Đăng xuất</span>
-      </button>
-    </div>
-  );
+  // Rê chuột từ mục này sang mục kế bên thì tên hiện ngay, không chờ lại.
+  return rail ? <Tooltip.Provider delay={150}>{nav}</Tooltip.Provider> : nav;
 }
 
 export function AppShell({
   hrefs,
   labels,
   userName,
+  userRole,
   children,
 }: {
   /** Các mục menu được hiện, do máy chủ tính (xem `navFor`). */
@@ -282,9 +292,12 @@ export function AppShell({
   /** Nhãn thay thế theo href (vd. "Lớp của tôi" → "Lớp học" khi được xem mọi lớp). */
   labels?: Record<string, string>;
   userName: string;
+  /** Tên vai trò để ghi cạnh tên ở nút tài khoản. */
+  userRole: string;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  // Menu đầy đủ (trượt ra từ trái) có hai nút mở: nút 3 gạch ở thanh trên của điện thoại và ở đầu dải icon.
+  const [menu] = useState(() => Dialog.createHandle());
   // Hiệu ứng hiện dần chỉ dùng khi chuyển trang trong ứng dụng; lần tải đầu hiện ngay để không làm chậm nội dung chính.
   const pathname = usePathname();
   const [firstPath] = useState(pathname);
@@ -298,51 +311,55 @@ export function AppShell({
     const children = visible(entry.children);
     return children.length > 0 ? [{ ...entry, children }] : [];
   });
-  // Trang Tổng quan kiểu dashboard 3D: thanh điều hướng luôn là dải icon và vùng nội dung tràn hết khung (không có cửa sổ kính).
+  // Trang Tổng quan kiểu dashboard 3D: vùng nội dung tràn hết khung (không có cửa sổ kính) và có thanh trên riêng.
   const stage = isStage(pathname);
-  const rail: Rail = stage ? "always" : "auto";
-  // Logo có chữ màu navy nên phần đầu thanh điều hướng giữ nền trắng. `rail` = dải icon: chỉ còn logo.
-  const sidebarBrand = (rail?: Rail) => (
-    <div className={cn("flex items-center gap-3 bg-white px-4 py-3 text-foreground", rail && RAIL.brand[rail])}>
-      <span className={cn("shrink-0", rail && RAIL.brandLogo[rail])}>
-        <BrandLogo height={56} />
-      </span>
-      <span className={cn("text-sm leading-tight font-semibold text-muted-foreground", rail && RAIL.hidden[rail])}>
-        Quản lý
-        <br />
-        trung tâm Robotics
-      </span>
-    </div>
-  );
 
   return (
     // --sidebar-w: bề rộng thanh điều hướng ở từng mốc; thanh Lưu cố định của trang Điểm danh/Chấm sao dựa vào biến này.
-    <div className={cn("flex min-h-dvh flex-col md:flex-row md:[--sidebar-w:4.5rem]", !stage && "xl:[--sidebar-w:15rem]")}>
+    <div className="flex min-h-dvh flex-col md:flex-row md:[--sidebar-w:4.5rem]">
+      <Sheet handle={menu}>
+        <SheetContent side="left" className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
+          <SheetHeader className="p-0">
+            {/* Logo có chữ màu navy nên phần đầu menu giữ nền trắng. */}
+            <SheetTitle>
+              <div className="flex items-center gap-3 bg-white px-4 py-3 text-foreground">
+                <span className="shrink-0">
+                  <BrandLogo height={56} />
+                </span>
+                <span className="text-sm leading-tight font-semibold text-muted-foreground">
+                  Quản lý
+                  <br />
+                  trung tâm Robotics
+                </span>
+              </div>
+            </SheetTitle>
+          </SheetHeader>
+          <div className="sidebar-scroll flex-1 overflow-y-auto">
+            <NavLinks items={items} onNavigate={() => menu.close()} />
+          </div>
+        </SheetContent>
+      </Sheet>
+
       <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-white px-3 md:hidden print:hidden">
-        <Sheet open={open} onOpenChange={setOpen}>
-          <SheetTrigger render={<Button variant="ghost" size="icon" aria-label="Mở menu" />}>
-            <MenuIcon />
-          </SheetTrigger>
-          <SheetContent side="left" className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
-            <SheetHeader className="p-0">
-              <SheetTitle>{sidebarBrand()}</SheetTitle>
-            </SheetHeader>
-            <div className="flex-1 overflow-y-auto">
-              <NavLinks items={items} onNavigate={() => setOpen(false)} />
-            </div>
-            <AccountLinks userName={userName} />
-          </SheetContent>
-        </Sheet>
+        <SheetTrigger handle={menu} render={<Button variant="ghost" size="icon" aria-label="Mở menu" />}>
+          <MenuIcon />
+        </SheetTrigger>
         <BrandLogo height={40} />
+        <div className="ml-auto">
+          <AccountMenu name={userName} role={userRole} compact />
+        </div>
       </header>
 
+      {/* Dải icon dùng cho mọi trang từ 768px. Logo và nút tài khoản nằm ở thanh trên của trang. */}
       <aside className="glass-sidebar sticky top-0 hidden h-dvh w-(--sidebar-w) shrink-0 flex-col text-sidebar-foreground md:flex print:hidden">
-        {/* Ở dashboard 3D logo nằm trên thanh trên của trang nên dải icon không lặp lại logo. */}
-        {stage ? <div className="h-2" /> : sidebarBrand(rail)}
-        <div className="sidebar-scroll flex-1 overflow-y-auto">
-          <NavLinks items={items} rail={rail} />
+        <div className="grid p-2 pb-0">
+          <SheetTrigger handle={menu} aria-label="Mở menu" className={cn(itemClass, railItemClass, "hover:bg-sidebar-accent")}>
+            <MenuIcon className="size-5" aria-hidden />
+          </SheetTrigger>
         </div>
-        <AccountLinks userName={userName} rail={rail} />
+        <div className="sidebar-scroll flex-1 overflow-y-auto">
+          <NavLinks items={items} rail />
+        </div>
       </aside>
 
       {/*
@@ -354,9 +371,25 @@ export function AppShell({
           <main className={cn("relative min-w-0", navigated && "page-enter")}>{children}</main>
         </div>
       ) : (
-        <div className="relative min-w-0 flex-1 md:p-3 xl:p-4 print:p-0">
-          <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:inset-3 md:rounded-3xl xl:inset-4 print:hidden" />
-          <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
+        <div className="flex min-w-0 flex-1 flex-col md:gap-3 md:p-3 xl:gap-4 xl:p-4 print:p-0">
+          {/* Thanh trên của các trang thường: logo và tên trung tâm, nút tài khoản (trang Tổng quan có thanh trên riêng). */}
+          <header className="panel relative z-30 hidden min-h-14 items-center justify-between gap-3 px-3 py-2 md:flex print:hidden">
+            <div className="flex items-center gap-2.5">
+              <BrandLogo height={38} />
+              <div className="leading-tight">
+                <p className="font-semibold">HAXI STEM</p>
+                <p className="flex items-center gap-1 text-xs text-ink-soft">
+                  <Building2Icon className="size-3.5" aria-hidden />
+                  Trung tâm Robotics
+                </p>
+              </div>
+            </div>
+            <AccountMenu name={userName} role={userRole} />
+          </header>
+          <div className="relative min-w-0 flex-1">
+            <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:rounded-3xl print:hidden" />
+            <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
+          </div>
         </div>
       )}
     </div>

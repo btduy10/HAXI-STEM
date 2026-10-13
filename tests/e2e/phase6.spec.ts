@@ -26,7 +26,7 @@ const ADMIN_PAGES = [
   "/admin/reports",
 ];
 
-test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh điều hướng đổi dạng theo cỡ màn hình, tắt hiệu ứng khi giảm chuyển động", async ({ page }) => {
+test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là dải icon ở mọi trang (rê chuột hiện tên và menu con, nút 3 gạch mở menu đầy đủ), tài khoản ở góc phải trên; tắt hiệu ứng khi giảm chuyển động", async ({ page }) => {
   test.setTimeout(240_000);
   // Lỗi JavaScript ở bất kỳ trang nào cũng làm hỏng bài kiểm tra.
   const pageErrors: string[] = [];
@@ -49,7 +49,7 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
     }
   }
 
-  // 768px: thanh điều hướng thu thành dải icon, mục vẫn bấm được theo tên; từ 1280px hiện đủ nhãn.
+  // Từ 768px mọi trang dùng cùng một dải icon (Tổng quan và trang thường như nhau, kể cả ở 1280px); mục vẫn bấm được theo tên.
   await page.setViewportSize({ width: 768, height: 900 });
   await page.goto("/admin/dashboard");
   const rail = page.locator("aside");
@@ -58,8 +58,34 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
   await expect(page).toHaveURL(/\/admin\/students$/);
   await expect(rail.getByRole("link", { name: "Học viên" })).toHaveAttribute("aria-current", "page");
   await page.setViewportSize({ width: 1280, height: 900 });
-  expect((await rail.boundingBox())!.width).toBeGreaterThan(200);
-  await expect(rail.getByText("Thời khóa biểu")).toBeVisible();
+  expect((await rail.boundingBox())!.width).toBeLessThan(100);
+  // Góc trái dưới không còn Đổi mật khẩu, Đăng xuất.
+  await expect(rail.getByText("Đăng xuất")).toHaveCount(0);
+  await expect(rail.getByText("Đổi mật khẩu")).toHaveCount(0);
+  // Rê chuột một icon: tên mục hiện ở bên phải.
+  await rail.getByRole("link", { name: "Thời khóa biểu" }).hover();
+  await expect(page.locator("[data-nav-tip]")).toHaveText("Thời khóa biểu");
+  // Rê chuột icon nhóm: menu con có chữ, bấm để đi và khung tự đóng.
+  await rail.getByRole("button", { name: "Giám đốc" }).hover();
+  const flyout = page.locator('[data-nav-flyout="Giám đốc"]');
+  await expect(flyout.getByRole("link")).toHaveText(["Khóa học", "Phòng & Ca học", "Giáo viên"]);
+  await flyout.getByRole("link", { name: "Khóa học" }).click();
+  await expect(page).toHaveURL(/\/admin\/courses$/);
+  await expect(flyout).toHaveCount(0);
+  // Nút 3 gạch: menu đầy đủ có chữ trượt ra, nhóm của trang đang mở xổ sẵn; chọn một mục thì đóng và chuyển trang.
+  await rail.getByRole("button", { name: "Mở menu" }).click();
+  const fullMenu = page.getByRole("dialog");
+  await expect(fullMenu.getByRole("link", { name: "Khóa học" })).toHaveAttribute("aria-current", "page");
+  await expect(fullMenu.getByText("Đăng xuất")).toHaveCount(0);
+  await fullMenu.getByRole("link", { name: "Thời khóa biểu" }).click();
+  await expect(page).toHaveURL(/\/admin\/timetable$/);
+  await expect(fullMenu).toHaveCount(0);
+  // Nút tài khoản ở góc phải trên của trang thường: Đổi mật khẩu, Đăng xuất; Escape đóng khung.
+  await page.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ }).click();
+  await expect(page.getByRole("link", { name: "Đổi mật khẩu" })).toHaveAttribute("href", "/change-password");
+  await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Đăng xuất" })).toHaveCount(0);
 
   // Giảm chuyển động: mọi animation của trang Tổng quan chạy xong tức thì, số KPI hiện ngay giá trị thật.
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -76,6 +102,25 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng, thanh đ
   await expect(page.getByRole("link", { name: /^[1-9]\d*\s*học viên đang học$/ })).toHaveAttribute("href", "/admin/students");
   await page.waitForTimeout(900);
   expect(await kpi.textContent()).toBe(shown);
+
+  // Điện thoại: menu trượt không còn Đăng xuất; nút tài khoản nằm trên thanh trên cùng, đăng xuất thì về trang đăng nhập.
+  await page.emulateMedia({ reducedMotion: null });
+  await page.setViewportSize({ width: 360, height: 740 });
+  await page.goto("/admin/timetable");
+  const drawer = page.getByRole("dialog");
+  await expect(async () => {
+    await page.getByRole("button", { name: "Mở menu" }).click();
+    await expect(drawer).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await expect(drawer.getByRole("link", { name: "Thời khóa biểu" })).toHaveAttribute("aria-current", "page");
+  await expect(drawer.getByText("Đăng xuất")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+  await page.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ }).click();
+  await expect(page.getByRole("link", { name: "Đổi mật khẩu" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  await page.getByRole("button", { name: "Đăng xuất" }).click();
+  await expect(page).toHaveURL(/\/login$/);
 
   expect(pageErrors).toEqual([]);
 });
