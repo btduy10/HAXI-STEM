@@ -77,6 +77,9 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là
   const fullMenu = page.getByRole("dialog");
   await expect(fullMenu.getByRole("link", { name: "Khóa học" })).toHaveAttribute("aria-current", "page");
   await expect(fullMenu.getByText("Đăng xuất")).toHaveCount(0);
+  // Menu đầy đủ hẹp (12rem) để ít che nội dung; tên mục dài nhất vẫn hiện đủ, không bị cắt.
+  expect((await fullMenu.boundingBox())!.width).toBeLessThanOrEqual(200);
+  expect(await fullMenu.evaluate((menu) => [...menu.querySelectorAll("nav span")].filter((label) => label.scrollWidth > label.clientWidth).map((label) => label.textContent))).toEqual([]);
   await fullMenu.getByRole("link", { name: "Thời khóa biểu" }).click();
   await expect(page).toHaveURL(/\/admin\/timetable$/);
   await expect(fullMenu).toHaveCount(0);
@@ -86,6 +89,30 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là
   await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Đăng xuất" })).toHaveCount(0);
+  // Thanh trên của trang thường tự ẩn như ở ứng dụng điện thoại: cuộn xuống thì trượt khỏi màn hình, cuộn lên thì hiện lại
+  // ngay giữa trang (không cần về đầu trang), nút tài khoản dùng được.
+  await page.goto("/admin/audit");
+  const topBar = page.locator("header").filter({ hasText: "Trung tâm Robotics" });
+  await expect(topBar).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeGreaterThan(700);
+  // Cuộn rồi chờ hai khung hình để trang kịp xử lý lần cuộn đó trước lần cuộn kế tiếp.
+  const scrollTo = (y: number) =>
+    page.evaluate((top) => {
+      window.scrollTo(0, top);
+      return new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+    }, y);
+  // Khung trang hiện trước khi trang kịp gắn sự kiện cuộn nên cuộn lại từ đầu cho tới khi thanh ẩn.
+  await expect(async () => {
+    await scrollTo(0);
+    await scrollTo(600);
+    await expect(topBar).not.toBeInViewport({ timeout: 1000 });
+  }).toPass();
+  await scrollTo(450);
+  await expect(topBar).toBeInViewport();
+  expect(await page.evaluate(() => window.scrollY)).toBe(450);
+  await topBar.getByRole("button", { name: /^Tài khoản: / }).click();
+  await expect(topBar.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   // Giảm chuyển động: mọi animation của trang Tổng quan chạy xong tức thì, số KPI hiện ngay giá trị thật.
   await page.emulateMedia({ reducedMotion: "reduce" });

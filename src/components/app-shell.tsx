@@ -31,7 +31,7 @@ import { Popover } from "@base-ui/react/popover";
 import { Tooltip } from "@base-ui/react/tooltip";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccountMenu } from "@/components/account-menu";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
@@ -94,7 +94,7 @@ const NAV: { admin: NavEntry[]; teacher: NavItem[] } = {
 
 const isStage = (pathname: string) => pathname.endsWith("/dashboard");
 
-const itemClass = "relative flex min-h-11 items-center gap-3 rounded-full px-4 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-sidebar-ring/60";
+const itemClass = "relative flex min-h-11 items-center gap-2.5 rounded-full px-3 text-sm transition-colors outline-none focus-visible:ring-3 focus-visible:ring-sidebar-ring/60";
 // Dải icon: ẩn nhãn, canh icon vào giữa; nhãn vẫn còn cho trình đọc màn hình, và hiện ra trong khung nổi khi rê chuột.
 const railItemClass = "justify-center px-0";
 // Khung nổi bên phải dải icon (tên mục, menu con của nhóm): cùng màu với thanh điều hướng.
@@ -126,7 +126,7 @@ function NavLink({ item, active, onNavigate, rail }: { item: NavItem; active: bo
       )}
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      <span className={cn(rail && "sr-only")}>{label}</span>
+      <span className={cn(rail ? "sr-only" : "truncate")}>{label}</span>
     </Link>
   );
   if (!rail) return link;
@@ -164,11 +164,11 @@ function NavGroup({ group, pathname, onNavigate }: { group: NavGroupItem; pathna
         className={cn(itemClass, "text-left hover:bg-sidebar-accent", containsActive ? "font-semibold" : "font-medium")}
       >
         <Icon className="size-4 shrink-0" aria-hidden />
-        <span className="flex-1">{group.label}</span>
+        <span className="flex-1 truncate">{group.label}</span>
         <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", open && "rotate-180")} aria-hidden />
       </button>
       {open && (
-        <div className="ml-4 grid gap-1 border-l border-sidebar-border pl-2">
+        <div className="ml-3 grid gap-1 border-l border-sidebar-border pl-1">
           {group.children.map((item) => (
             <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={onNavigate} />
           ))}
@@ -207,7 +207,7 @@ function RailGroup({ group, pathname }: { group: NavGroupItem; pathname: string 
       <Popover.Portal>
         <Popover.Positioner side="right" align="start" sideOffset={10} className="z-50">
           <Popover.Popup data-nav-flyout={group.label} className={cn(flyoutClass, "grid w-56 gap-1 p-2")}>
-            <Popover.Title className="px-4 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">{group.label}</Popover.Title>
+            <Popover.Title className="px-3 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">{group.label}</Popover.Title>
             {group.children.map((item) => (
               <NavLink key={item.href} item={item} active={isActive(pathname, item.href)} onNavigate={() => setOpen(false)} />
             ))}
@@ -280,6 +280,37 @@ function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?:
   return rail ? <Tooltip.Provider delay={150}>{nav}</Tooltip.Provider> : nav;
 }
 
+/**
+ * Thanh trên tự ẩn như thanh tiêu đề của ứng dụng điện thoại: true khi người dùng đang cuộn xuống (nhường chỗ cho nội dung),
+ * false khi cuộn lên hoặc đang ở gần đầu trang. Bỏ qua các lần cuộn rất ngắn để thanh không giật. `show` hiện lại thanh ngay
+ * (dùng khi Tab tới một nút trong thanh đang ẩn).
+ */
+function useHiddenOnScrollDown(): [hidden: boolean, show: () => void] {
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    const NEAR_TOP = 72;
+    const STEP = 6;
+    let last = window.scrollY;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const y = window.scrollY;
+        if (y >= NEAR_TOP && Math.abs(y - last) < STEP) return;
+        setHidden(y >= NEAR_TOP && y > last);
+        last = y;
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+  return [hidden, () => setHidden(false)];
+}
+
 export function AppShell({
   hrefs,
   labels,
@@ -313,20 +344,22 @@ export function AppShell({
   });
   // Trang Tổng quan kiểu dashboard 3D: vùng nội dung tràn hết khung (không có cửa sổ kính) và có thanh trên riêng.
   const stage = isStage(pathname);
+  const [barHidden, showBar] = useHiddenOnScrollDown();
 
   return (
     // --sidebar-w: bề rộng thanh điều hướng ở từng mốc; thanh Lưu cố định của trang Điểm danh/Chấm sao dựa vào biến này.
     <div className="flex min-h-dvh flex-col md:flex-row md:[--sidebar-w:4.5rem]">
       <Sheet handle={menu}>
-        <SheetContent side="left" className="w-72 gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
+        {/* Rộng 12rem (nửa bề rộng cũ ở máy tính): vừa đủ cho tên mục dài nhất, bớt che nội dung. */}
+        <SheetContent side="left" className="gap-0 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground data-[side=left]:w-48">
           <SheetHeader className="p-0">
             {/* Logo có chữ màu navy nên phần đầu menu giữ nền trắng. */}
             <SheetTitle>
-              <div className="flex items-center gap-3 bg-white px-4 py-3 text-foreground">
+              <div className="flex items-center gap-2 bg-white py-2.5 pr-10 pl-3 text-foreground">
                 <span className="shrink-0">
-                  <BrandLogo height={56} />
+                  <BrandLogo height={44} />
                 </span>
-                <span className="text-sm leading-tight font-semibold text-muted-foreground">
+                <span className="text-xs leading-tight font-semibold text-muted-foreground">
                   Quản lý
                   <br />
                   trung tâm Robotics
@@ -372,8 +405,15 @@ export function AppShell({
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 flex-col md:gap-3 md:p-3 xl:gap-4 xl:p-4 print:p-0">
-          {/* Thanh trên của các trang thường: logo và tên trung tâm, nút tài khoản (trang Tổng quan có thanh trên riêng). */}
-          <header className="panel relative z-30 hidden min-h-14 items-center justify-between gap-3 px-3 py-2 md:flex print:hidden">
+          {/*
+            Thanh trên của các trang thường: logo và tên trung tâm, nút tài khoản (trang Tổng quan có thanh trên riêng).
+            Dính ở đầu trang; cuộn xuống thì trượt ra khỏi màn hình, cuộn lên thì hiện lại (Tab tới nút bên trong cũng hiện).
+          */}
+          <header
+            data-hidden={barHidden || undefined}
+            onFocus={showBar}
+            className="panel sticky top-3 z-30 hidden min-h-14 items-center justify-between gap-3 px-3 py-2 transition-transform duration-200 ease-out data-hidden:-translate-y-[calc(100%+1.5rem)] motion-reduce:transition-none md:flex xl:top-4 print:hidden"
+          >
             <div className="flex items-center gap-2.5">
               <BrandLogo height={38} />
               <div className="leading-tight">
