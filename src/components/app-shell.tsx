@@ -31,7 +31,7 @@ import { Popover } from "@base-ui/react/popover";
 import { Tooltip } from "@base-ui/react/tooltip";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { AccountMenu } from "@/components/account-menu";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
@@ -280,37 +280,6 @@ function NavLinks({ items, onNavigate, rail }: { items: NavEntry[]; onNavigate?:
   return rail ? <Tooltip.Provider delay={150}>{nav}</Tooltip.Provider> : nav;
 }
 
-/**
- * Thanh trên tự ẩn như thanh tiêu đề của ứng dụng điện thoại: true khi người dùng đang cuộn xuống (nhường chỗ cho nội dung),
- * false khi cuộn lên hoặc đang ở gần đầu trang. Bỏ qua các lần cuộn rất ngắn để thanh không giật. `show` hiện lại thanh ngay
- * (dùng khi Tab tới một nút trong thanh đang ẩn).
- */
-function useHiddenOnScrollDown(): [hidden: boolean, show: () => void] {
-  const [hidden, setHidden] = useState(false);
-  useEffect(() => {
-    const NEAR_TOP = 72;
-    const STEP = 6;
-    let last = window.scrollY;
-    let frame = 0;
-    const onScroll = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        const y = window.scrollY;
-        if (y >= NEAR_TOP && Math.abs(y - last) < STEP) return;
-        setHidden(y >= NEAR_TOP && y > last);
-        last = y;
-      });
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      cancelAnimationFrame(frame);
-    };
-  }, []);
-  return [hidden, () => setHidden(false)];
-}
-
 export function AppShell({
   hrefs,
   labels,
@@ -323,7 +292,7 @@ export function AppShell({
   /** Nhãn thay thế theo href (vd. "Lớp của tôi" → "Lớp học" khi được xem mọi lớp). */
   labels?: Record<string, string>;
   userName: string;
-  /** Tên vai trò để ghi cạnh tên ở nút tài khoản. */
+  /** Tên vai trò để ghi cạnh tên trong khung của nút tài khoản. */
   userRole: string;
   children: React.ReactNode;
 }) {
@@ -342,9 +311,8 @@ export function AppShell({
     const children = visible(entry.children);
     return children.length > 0 ? [{ ...entry, children }] : [];
   });
-  // Trang Tổng quan kiểu dashboard 3D: vùng nội dung tràn hết khung (không có cửa sổ kính) và có thanh trên riêng.
+  // Trang Tổng quan kiểu dashboard 3D: vùng nội dung tràn hết khung (không có cửa sổ kính) và có thanh trên của nó.
   const stage = isStage(pathname);
-  const [barHidden, showBar] = useHiddenOnScrollDown();
 
   return (
     // --sidebar-w: bề rộng thanh điều hướng ở từng mốc; thanh Lưu cố định của trang Điểm danh/Chấm sao dựa vào biến này.
@@ -384,7 +352,10 @@ export function AppShell({
         </div>
       </header>
 
-      {/* Dải icon dùng cho mọi trang từ 768px. Logo và nút tài khoản nằm ở thanh trên của trang. */}
+      {/*
+        Dải icon dùng cho mọi trang từ 768px. Từ mốc này chỉ trang Tổng quan có thanh trên (logo, nút tài khoản để đổi mật khẩu
+        và đăng xuất); các trang khác dành trọn chiều cao cho nội dung.
+      */}
       <aside className="glass-sidebar sticky top-0 hidden h-dvh w-(--sidebar-w) shrink-0 flex-col text-sidebar-foreground md:flex print:hidden">
         <div className="grid p-2 pb-0">
           <SheetTrigger handle={menu} aria-label="Mở menu" className={cn(itemClass, railItemClass, "hover:bg-sidebar-accent")}>
@@ -405,32 +376,9 @@ export function AppShell({
           <main className={cn("relative min-w-0", navigated && "page-enter")}>{children}</main>
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 flex-col md:gap-3 md:p-3 xl:gap-4 xl:p-4 print:p-0">
-          {/*
-            Thanh trên của các trang thường: logo và tên trung tâm, nút tài khoản (trang Tổng quan có thanh trên riêng).
-            Dính ở đầu trang; cuộn xuống thì trượt ra khỏi màn hình, cuộn lên thì hiện lại (Tab tới nút bên trong cũng hiện).
-          */}
-          <header
-            data-hidden={barHidden || undefined}
-            onFocus={showBar}
-            className="panel sticky top-3 z-30 hidden min-h-14 items-center justify-between gap-3 px-3 py-2 transition-transform duration-200 ease-out data-hidden:-translate-y-[calc(100%+1.5rem)] motion-reduce:transition-none md:flex xl:top-4 print:hidden"
-          >
-            <div className="flex items-center gap-2.5">
-              <BrandLogo height={38} />
-              <div className="leading-tight">
-                <p className="font-semibold">HAXI STEM</p>
-                <p className="flex items-center gap-1 text-xs text-ink-soft">
-                  <Building2Icon className="size-3.5" aria-hidden />
-                  Trung tâm Robotics
-                </p>
-              </div>
-            </div>
-            <AccountMenu name={userName} role={userRole} />
-          </header>
-          <div className="relative min-w-0 flex-1">
-            <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:rounded-3xl print:hidden" />
-            <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
-          </div>
+        <div className="relative min-w-0 flex-1 md:p-3 xl:p-4 print:p-0">
+          <div aria-hidden className="glass-window pointer-events-none absolute inset-0 md:inset-3 md:rounded-3xl xl:inset-4 print:hidden" />
+          <main className={cn("relative min-w-0 p-3 sm:p-6 xl:p-8 print:p-0", navigated && "page-enter")}>{children}</main>
         </div>
       )}
     </div>

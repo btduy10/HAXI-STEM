@@ -26,7 +26,7 @@ const ADMIN_PAGES = [
   "/admin/reports",
 ];
 
-test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là dải icon ở mọi trang (rê chuột hiện tên và menu con, nút 3 gạch mở menu đầy đủ), tài khoản ở góc phải trên; tắt hiệu ứng khi giảm chuyển động", async ({ page }) => {
+test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là dải icon ở mọi trang (rê chuột hiện tên và menu con, nút 3 gạch mở menu đầy đủ), trang thường không có thanh trên, tài khoản ở Tổng quan; tắt hiệu ứng khi giảm chuyển động", async ({ page }) => {
   test.setTimeout(240_000);
   // Lỗi JavaScript ở bất kỳ trang nào cũng làm hỏng bài kiểm tra.
   const pageErrors: string[] = [];
@@ -83,36 +83,19 @@ test("Giao diện: không tràn ngang ở tablet và màn hình rộng; menu là
   await fullMenu.getByRole("link", { name: "Thời khóa biểu" }).click();
   await expect(page).toHaveURL(/\/admin\/timetable$/);
   await expect(fullMenu).toHaveCount(0);
-  // Nút tài khoản ở góc phải trên của trang thường: Đổi mật khẩu, Đăng xuất; Escape đóng khung.
+  // Từ 768px các trang thường không có thanh trên: không logo, không nút tài khoản, nội dung bắt đầu sát mép trên.
+  await expect(page.getByRole("heading", { name: "Thời khóa biểu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Tài khoản: / })).toHaveCount(0);
+  await expect(page.locator("header").filter({ visible: true })).toHaveCount(0);
+  expect((await page.locator("main").boundingBox())!.y).toBeLessThan(24);
+  // Đổi mật khẩu và Đăng xuất nằm ở nút tài khoản trên thanh trên của Tổng quan; Escape đóng khung.
+  await rail.getByRole("link", { name: "Tổng quan" }).click();
+  await expect(page).toHaveURL(/\/admin\/dashboard$/);
   await page.getByRole("button", { name: /^Tài khoản: .+, Quản trị$/ }).click();
   await expect(page.getByRole("link", { name: "Đổi mật khẩu" })).toHaveAttribute("href", "/change-password");
   await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Đăng xuất" })).toHaveCount(0);
-  // Thanh trên của trang thường tự ẩn như ở ứng dụng điện thoại: cuộn xuống thì trượt khỏi màn hình, cuộn lên thì hiện lại
-  // ngay giữa trang (không cần về đầu trang), nút tài khoản dùng được.
-  await page.goto("/admin/audit");
-  const topBar = page.locator("header").filter({ hasText: "Trung tâm Robotics" });
-  await expect(topBar).toBeInViewport();
-  expect(await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeGreaterThan(700);
-  // Cuộn rồi chờ hai khung hình để trang kịp xử lý lần cuộn đó trước lần cuộn kế tiếp.
-  const scrollTo = (y: number) =>
-    page.evaluate((top) => {
-      window.scrollTo(0, top);
-      return new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
-    }, y);
-  // Khung trang hiện trước khi trang kịp gắn sự kiện cuộn nên cuộn lại từ đầu cho tới khi thanh ẩn.
-  await expect(async () => {
-    await scrollTo(0);
-    await scrollTo(600);
-    await expect(topBar).not.toBeInViewport({ timeout: 1000 });
-  }).toPass();
-  await scrollTo(450);
-  await expect(topBar).toBeInViewport();
-  expect(await page.evaluate(() => window.scrollY)).toBe(450);
-  await topBar.getByRole("button", { name: /^Tài khoản: / }).click();
-  await expect(topBar.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
-  await page.keyboard.press("Escape");
 
   // Giảm chuyển động: mọi animation của trang Tổng quan chạy xong tức thì, số KPI hiện ngay giá trị thật.
   await page.emulateMedia({ reducedMotion: "reduce" });
