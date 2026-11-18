@@ -102,14 +102,19 @@ describe("đóng lớp và chốt tổng kết", () => {
 
   it("sau khi đóng: không điểm danh, ghi sao, hoàn tác hay ghi danh thêm", async () => {
     await close();
-    const closed = { code: "CONFLICT" };
+    const closed = { code: "CONFLICT", message: "Lớp đã đóng và đã chốt tổng kết nên không thay đổi được nữa." };
+    // Trang Điểm danh và trang Ghi sao báo trước cùng lý do, bảng chỉ để xem; quá hạn khóa không còn là lý do (mở khóa cũng vô ích).
+    const sheet = await attendance.getAttendanceSheet(f.actorA, s2.id, new Date("2026-03-01T05:00:00Z"));
+    expect(sheet).toMatchObject({ blockedReason: closed.message, readOnlyReason: closed.message, locked: false });
+    const board = await stars.getSessionStarBoard(f.actorA, s1.id, now);
+    expect(board).toMatchObject({ blockedReason: closed.message, readOnlyReason: closed.message });
     await expect(
       attendance.saveAttendance(f.actorA, { sessionId: s2.id, content: null, entries: [a1(), a2()].map((studentId) => ({ studentId, status: "present" as const, note: null })) }, new Date("2026-01-14T05:00:00Z")),
     ).rejects.toMatchObject(closed);
     await expect(stars.awardStars(f.admin, { sessionId: s1.id, criteriaId: plus3, studentIds: [a1()], note: null }, now)).rejects.toMatchObject(closed);
     const [log] = await db.select().from(starLogs).where(eq(starLogs.sessionId, s1.id));
     await expect(stars.undoStarLog(f.admin, log!.id, now)).rejects.toMatchObject(closed);
-    await expect(classSvc.enrollStudent(f.admin, { classId: f.classA.id, studentId: f.students[4]!.id, joinedAt: "2026-01-21" })).rejects.toMatchObject(closed);
+    await expect(classSvc.enrollStudent(f.admin, { classId: f.classA.id, studentId: f.students[4]!.id, joinedAt: "2026-01-21" })).rejects.toMatchObject({ code: "CONFLICT" });
     const summary = await summaries.getClassSummary(f.admin, f.classA.id);
     expect(summary.rows.map((r) => r.totalStars)).toEqual([6, 3]);
   });

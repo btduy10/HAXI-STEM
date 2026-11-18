@@ -3,7 +3,7 @@ import { SessionTabs } from "@/components/session-tabs";
 import { StarPad } from "@/components/star-pad";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { WEEKDAY_LABELS, isoWeekday } from "@/lib/dates";
-import { formatDate, formatDateTime, formatTime, todayIso } from "@/lib/format";
+import { formatDate, formatDateTime, formatTime } from "@/lib/format";
 import { type Actor, can } from "@/server/guard";
 import { orNotFound } from "@/server/page";
 import { getSession } from "@/server/services/sessions";
@@ -26,8 +26,6 @@ export async function StarsPage({
   const session = await orNotFound(getSession(actor, sessionId));
   // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có bảng ghi sao: trả 404.
   const board = await orNotFound(getSessionStarBoard(actor, sessionId));
-  const blocked =
-    session.status === "cancelled" ? "Buổi đã hủy nên không ghi sao được." : session.date > todayIso() ? "Chưa đến ngày học." : null;
 
   return (
     <div className="mx-auto grid max-w-3xl gap-4">
@@ -43,30 +41,27 @@ export async function StarsPage({
       </div>
       <SessionTabs area={area} sessionId={sessionId} active="stars" query={tabQuery} show={{ attendance: can(actor, "attendance", "view"), stars: true }} />
 
-      {blocked ? (
+      {/* Không ghi được (buổi đã hủy, chưa đến ngày, lớp đã đóng…, hoặc chỉ có quyền xem): báo lý do, vẫn xem được sao của buổi. */}
+      {board.readOnlyReason && (
         <Alert>
-          <AlertDescription>{blocked}</AlertDescription>
+          <AlertDescription>{board.readOnlyReason}</AlertDescription>
         </Alert>
-      ) : board.students.length === 0 ? (
+      )}
+      {board.students.length === 0 ? (
         <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Buổi học không có học viên nào.</p>
-      ) : !can(actor, "stars", "add") ? (
-        <>
-          <Alert>
-            <AlertDescription>Bạn chỉ có quyền xem sao của buổi này, không có quyền ghi sao.</AlertDescription>
-          </Alert>
-          <ul className="grid gap-1.5">
-            {board.students.map((s) => (
-              <li key={s.studentId} className="flex items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm">
-                <span className="min-w-0 break-words">
-                  {s.fullName} <span className="text-muted-foreground">({s.code}{s.makeup && " · Học bù"})</span>
-                </span>
-                <span className="shrink-0 font-semibold tabular-nums">
-                  {s.sessionStars > 0 ? `+${s.sessionStars}` : s.sessionStars} sao buổi này · tổng {s.total}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
+      ) : board.readOnlyReason ? (
+        <ul className="grid gap-1.5">
+          {board.students.map((s) => (
+            <li key={s.studentId} className="flex items-center justify-between gap-2 glass-solid rounded-xl border px-3 py-2 text-sm">
+              <span className="min-w-0 break-words">
+                {s.fullName} <span className="text-muted-foreground">({s.code}{s.makeup && " · Học bù"})</span>
+              </span>
+              <span className="shrink-0 font-semibold tabular-nums">
+                {s.sessionStars > 0 ? `+${s.sessionStars}` : s.sessionStars} sao buổi này · tổng {s.total}
+              </span>
+            </li>
+          ))}
+        </ul>
       ) : (
         <StarPad
           sessionId={sessionId}

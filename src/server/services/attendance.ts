@@ -7,8 +7,9 @@ import { todayIso } from "@/lib/format";
 import type { attendanceInput } from "@/lib/validation/schedule";
 import { audit } from "../audit";
 import { AppError, notFound } from "../errors";
-import { type Actor, assertAdmin, assertCan, assertClassOpen, assertNotTimetableOnly, assertSessionAccess, can, isTimetableOnly, seesAllClasses } from "../guard";
+import { type Actor, assertAdmin, assertCan, assertSessionAccess, can, isTimetableOnly, seesAllClasses } from "../guard";
 import { getSettings } from "../settings";
+import { openSessionForWrite, sessionWriteState } from "./session-write";
 import { lessonsForClass } from "./syllabus";
 
 const UNLOCK_HOURS = 24;
@@ -62,44 +63,36 @@ async function ownRoster(tx: DbOrTx, session: SessionCore) {
     .map(({ studentId, code, fullName }) => ({ studentId, code, fullName }));
 }
 
-/** Lý do không điểm danh/sửa được, hoặc null nếu được phép. */
-function blockedReason(
-  session: Pick<typeof sessions.$inferSelect, "date" | "status" | "attendanceUnlockedUntil">,
-  lockDays: number,
-  now: Date,
-): string | null {
-  const today = todayIso(now);
-  if (session.status === "cancelled") return "Buổi đã hủy nên không cần điểm danh.";
-  if (session.date > today) return "Chưa đến ngày học.";
-  if (isAttendanceLocked({ sessionDate: session.date, today, lockDays, unlockedUntil: session.attendanceUnlockedUntil, now })) {
-    return `Đã quá ${lockDays} ngày kể từ buổi học nên điểm danh bị khóa. Liên hệ quản trị viên để mở khóa.`;
-  }
-  return null;
-}
-
 export async function getAttendanceSheet(actor: Actor, sessionId: string, now: Date = new Date()) {
   assertCan(actor, "attendance", "view");
   await assertSessionAccess(actor, sessionId);
   const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
   // Buổi của lớp chỉ hiển thị trên Thời khóa biểu không có bảng điểm danh.
   if (!session || (await isTimetableOnly(session.classId))) throw notFound("buổi học");
-  const [roster, existing, settings, lessons] = await Promise.all([
+  const [roster, existing, block, lessons] = await Promise.all([
     sessionRoster(db, session),
     db.select().from(attendances).where(eq(attendances.sessionId, sessionId)),
-    getSettings(),
+    sessionWriteState(session, "attendance", now),
     // Bài học trong Syllabus của lớp của buổi: người vào được buổi thì đọc được, không cần quyền menu Syllabus.
     lessonsForClass(session.classId),
   ]);
   const byStudent = new Map(existing.map((a) => [a.studentId, a]));
-  const reason = blockedReason(session, settings.attendance_lock_days, now);
+  const recorded = existing.length > 0;
+  // Buổi chưa điểm danh cần quyền Thêm; buổi đã điểm danh cần quyền Sửa.
+  const canSave = can(actor, "attendance", recorded ? "edit" : "add");
   return {
-    recorded: existing.length > 0,
+    recorded,
     lessons,
     teacherRemark: session.teacherRemark ?? "",
-    // Buổi chưa điểm danh cần quyền Thêm; buổi đã điểm danh cần quyền Sửa.
-    canSave: can(actor, "attendance", existing.length > 0 ? "edit" : "add"),
-    blockedReason: reason,
-    locked: Boolean(reason) && session.status !== "cancelled" && session.date <= todayIso(now),
+    canSave,
+    /** Lý do của buổi học (đã hủy, chưa đến ngày, lớp đã đóng, quá hạn khóa…), không gồm quyền của người xem. */
+    blockedReason: block?.message ?? null,
+    /** Lý do bảng chỉ để xem: lý do của buổi học, hoặc người xem không có quyền lưu. null khi lưu được. */
+    readOnlyReason:
+      block?.message ??
+      (canSave ? null : recorded ? "Bạn chỉ có quyền xem điểm danh đã lưu, không có quyền sửa." : "Bạn không có quyền điểm danh buổi chưa điểm danh."),
+    /** Quá hạn khóa điểm danh: Admin mở khóa được. */
+    locked: block?.code === "locked",
     // Mặc định "Có mặt" cho cả lớp; GV chỉ sửa những em khác.
     rows: roster.map((r) => ({
       ...r,
@@ -111,15 +104,8 @@ export async function getAttendanceSheet(actor: Actor, sessionId: string, now: D
 
 /** Lưu điểm danh cả buổi một lần. Mọi thay đổi so với lần trước được ghi vào audit_logs. */
 export async function saveAttendance(actor: Actor, input: z.output<typeof attendanceInput>, now: Date = new Date()) {
-  await assertSessionAccess(actor, input.sessionId);
   return db.transaction(async (tx) => {
-    const [session] = await tx.select().from(sessions).where(eq(sessions.id, input.sessionId)).for("update").limit(1);
-    if (!session) throw notFound("buổi học");
-    await assertNotTimetableOnly(session.classId, tx);
-    const settings = await getSettings(tx);
-    const reason = blockedReason(session, settings.attendance_lock_days, now);
-    if (reason) throw new AppError("CONFLICT", reason);
-    await assertClassOpen(session.classId, tx);
+    const session = await openSessionForWrite(actor, tx, input.sessionId, "attendance", now);
 
     const roster = await sessionRoster(tx, session);
     const rosterIds = new Set(roster.map((r) => r.studentId));

@@ -68,10 +68,7 @@ export async function AttendancePage({
         initialRemark={sheet.teacherRemark}
         lessons={sheet.lessons}
         recorded={sheet.recorded}
-        blockedReason={
-          sheet.blockedReason ??
-          (sheet.canSave ? null : sheet.recorded ? "Bạn chỉ có quyền xem điểm danh đã lưu, không có quyền sửa." : "Bạn không có quyền điểm danh buổi chưa điểm danh.")
-        }
+        blockedReason={sheet.readOnlyReason}
         saveAction={saveAttendanceAction}
       />
     </div>

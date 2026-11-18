@@ -255,11 +255,14 @@ test("GV của lớp đã đóng: thấy lớp ở trạng thái đã đóng, kh
 
   await page.goto("/teacher/classes");
   await expect(page.getByText("Đã đóng")).toBeVisible();
+  // Trang Ghi sao và trang Điểm danh báo trước lý do ngay khi mở; sao và điểm danh của buổi chỉ còn để xem.
   await page.goto(`/teacher/sessions/${session!.id}/stars`);
-  await page.getByRole("button", { name: "Chọn cả lớp" }).click();
-  await page.getByRole("button", { name: "Ghi sao", exact: true }).click();
-  await page.getByRole("dialog").getByRole("button", { name: /Hoàn thành nhiệm vụ/ }).click();
   await expect(page.getByText(/Lớp đã đóng và đã chốt tổng kết/)).toBeVisible();
+  await expect(page.getByText(/sao buổi này · tổng/).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Chọn cả lớp" })).toHaveCount(0);
+  await page.goto(`/teacher/sessions/${session!.id}/attendance`);
+  await expect(page.getByText(/Lớp đã đóng và đã chốt tổng kết/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Lưu/ })).toHaveCount(0);
 });
 
 test("Phân quyền: ô tick thông tin cá nhân học viên; Giáo viên trực xem và sửa học viên, chỉ làm được đúng phần được mở", async ({ page, context }) => {

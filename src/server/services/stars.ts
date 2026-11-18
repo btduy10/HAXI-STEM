@@ -21,8 +21,9 @@ import { todayIso } from "@/lib/format";
 import type { awardInput, criteriaInput } from "@/lib/validation/stars";
 import { audit } from "../audit";
 import { AppError, notFound } from "../errors";
-import { type Actor, allowedClassIds, assertAdmin, assertCan, assertClassOpen, assertNotTimetableOnly, assertSessionAccess, isAdmin, isTimetableOnly, seesAllClasses } from "../guard";
+import { type Actor, allowedClassIds, assertAdmin, assertCan, assertClassOpen, assertSessionAccess, can, isAdmin, isTimetableOnly, seesAllClasses } from "../guard";
 import { getSettings } from "../settings";
+import { openSessionForWrite, sessionWriteState } from "./session-write";
 import { sessionRoster } from "./attendance";
 import { createRow, deleteRow, updateRow } from "./crud";
 import { listClassStudents } from "./students";
@@ -139,14 +140,8 @@ export type StarResult = { count: number; stars: number };
  */
 export async function awardStars(actor: Actor, input: z.output<typeof awardInput>, now: Date = new Date()): Promise<StarResult> {
   assertCan(actor, "stars", "add");
-  await assertSessionAccess(actor, input.sessionId);
   return db.transaction(async (tx) => {
-    const [session] = await tx.select().from(sessions).where(eq(sessions.id, input.sessionId)).limit(1);
-    if (!session) throw notFound("buổi học");
-    if (session.status === "cancelled") throw new AppError("CONFLICT", "Buổi đã hủy nên không ghi sao được.");
-    if (session.date > todayIso(now)) throw new AppError("CONFLICT", "Chưa đến ngày học.");
-    await assertClassOpen(session.classId, tx);
-    await assertNotTimetableOnly(session.classId, tx);
+    const session = await openSessionForWrite(actor, tx, input.sessionId, "stars", now);
 
     const [criteria] = await tx.select().from(starCriteria).where(eq(starCriteria.id, input.criteriaId)).limit(1);
     if (!criteria || !criteria.active) throw new AppError("VALIDATION", "Tiêu chí không tồn tại hoặc đã ngừng dùng.");
@@ -314,7 +309,7 @@ function logQuery() {
 export type StarLogRow = Awaited<ReturnType<typeof logQuery>>[number];
 
 /** Bảng ghi sao của một buổi: danh sách học viên kèm tổng sao, tiêu chí đang dùng và sổ cái của buổi. */
-export async function getSessionStarBoard(actor: Actor, sessionId: string) {
+export async function getSessionStarBoard(actor: Actor, sessionId: string, now: Date = new Date()) {
   assertCan(actor, "stars", "view");
   await assertSessionAccess(actor, sessionId);
   const [session] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
@@ -322,16 +317,23 @@ export async function getSessionStarBoard(actor: Actor, sessionId: string) {
   if (!session || (await isTimetableOnly(session.classId))) throw notFound("buổi học");
   const roster = await sessionRoster(db, session);
   const ids = roster.map((r) => r.studentId);
-  const [totals, logs, criteria, settings] = await Promise.all([
+  const [totals, logs, criteria, settings, block] = await Promise.all([
     starTotalsOf(db, ids),
     logQuery().where(eq(starLogs.sessionId, sessionId)).orderBy(desc(starLogs.recordedAt), desc(starLogs.id)),
     listCriteria(actor, true),
     getSettings(),
+    sessionWriteState(session, "stars", now),
   ]);
+  const canAward = can(actor, "stars", "add");
   const net = new Map<string, number>();
   for (const log of logs) net.set(log.studentId, (net.get(log.studentId) ?? 0) + log.stars);
   return {
     maxDeduction: settings.max_deduction_per_session,
+    canAward,
+    /** Lý do của buổi học (đã hủy, chưa đến ngày, lớp đã đóng…), không gồm quyền của người xem. */
+    blockedReason: block?.message ?? null,
+    /** Lý do chỉ xem được sao của buổi: lý do của buổi học, hoặc người xem không có quyền ghi sao. null khi ghi được. */
+    readOnlyReason: block?.message ?? (canAward ? null : "Bạn chỉ có quyền xem sao của buổi này, không có quyền ghi sao."),
     criteria,
     logs,
     students: roster.map((r) => ({ ...r, total: totals.get(r.studentId) ?? 0, sessionStars: net.get(r.studentId) ?? 0 })),

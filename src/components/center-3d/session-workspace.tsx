@@ -106,17 +106,16 @@ export function SessionWorkspace({
                 }}
               />
             ) : stars ? (
-              stars.blockedReason ? (
-                <Alert>
-                  <AlertDescription>{stars.blockedReason}</AlertDescription>
-                </Alert>
-              ) : stars.students.length === 0 ? (
-                <p className={emptyBox}>Buổi học không có học viên nào.</p>
-              ) : !stars.canAward ? (
-                <div className="grid gap-3">
+              <div className="grid gap-3">
+                {/* Không ghi được (buổi đã hủy, chưa đến ngày, lớp đã đóng…, hoặc chỉ có quyền xem): báo lý do, vẫn xem được sao. */}
+                {stars.readOnlyReason && (
                   <Alert>
-                    <AlertDescription>Bạn chỉ có quyền xem sao của buổi này, không có quyền ghi sao.</AlertDescription>
+                    <AlertDescription>{stars.readOnlyReason}</AlertDescription>
                   </Alert>
+                )}
+                {stars.students.length === 0 ? (
+                  <p className={emptyBox}>Buổi học không có học viên nào.</p>
+                ) : stars.readOnlyReason ? (
                   <ul className="grid gap-1.5">
                     {stars.students.map((s) => (
                       <li key={s.studentId} className="flex items-center justify-between gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
@@ -133,16 +132,16 @@ export function SessionWorkspace({
                       </li>
                     ))}
                   </ul>
-                </div>
-              ) : (
-                <StarPad
-                  sessionId={sessionId}
-                  maxDeduction={stars.maxDeduction}
-                  criteria={stars.criteria}
-                  students={stars.students.map((s) => ({ studentId: s.studentId, code: s.code, fullName: s.makeup ? `${s.fullName} (Học bù)` : s.fullName, sessionStars: s.sessionStars, total: s.total }))}
-                  logs={stars.logs}
-                />
-              )
+                ) : (
+                  <StarPad
+                    sessionId={sessionId}
+                    maxDeduction={stars.maxDeduction}
+                    criteria={stars.criteria}
+                    students={stars.students.map((s) => ({ studentId: s.studentId, code: s.code, fullName: s.makeup ? `${s.fullName} (Học bù)` : s.fullName, sessionStars: s.sessionStars, total: s.total }))}
+                    logs={stars.logs}
+                  />
+                )}
+              </div>
             ) : null}
           </div>
         </div>

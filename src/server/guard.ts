@@ -9,6 +9,7 @@ import {
   type RolePermissions,
   type UserRole,
 } from "@/lib/permissions";
+import { CLASS_CLOSED_MESSAGE, TIMETABLE_ONLY_MESSAGE } from "@/domain/session-write";
 import { AppError, forbidden, notFound } from "./errors";
 
 // Người thực hiện thao tác, luôn lấy từ phiên ở máy chủ (không nhận từ client).
@@ -131,7 +132,7 @@ export async function assertSessionAccess(actor: Actor, sessionId: string, tx: D
 
 export const unauthenticated = () => new AppError("UNAUTHENTICATED", "Vui lòng đăng nhập.");
 
-export const TIMETABLE_ONLY_MESSAGE = "Lớp này chỉ hiển thị trên Thời khóa biểu nên không dùng được chức năng này.";
+export { TIMETABLE_ONLY_MESSAGE } from "@/domain/session-write";
 
 /**
  * Lớp "chỉ hiển thị trên Thời khóa biểu" (vd. cho mượn phòng) không có học viên: không điểm danh, ghi sao,
@@ -149,5 +150,5 @@ export async function isTimetableOnly(classId: string, tx: DbOrTx = db) {
 /** Lớp đã đóng thì số liệu đã chốt: không điểm danh hay ghi/hoàn tác sao cho các buổi của lớp nữa. */
 export async function assertClassOpen(classId: string, tx: DbOrTx = db) {
   const [cls] = await tx.select({ status: classes.status }).from(classes).where(eq(classes.id, classId)).limit(1);
-  if (cls?.status !== "open") throw new AppError("CONFLICT", "Lớp đã đóng và đã chốt tổng kết nên không thay đổi được nữa.");
+  if (cls?.status !== "open") throw new AppError("CONFLICT", CLASS_CLOSED_MESSAGE);
 }

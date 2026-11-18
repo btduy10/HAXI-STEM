@@ -200,7 +200,7 @@ export async function sessionWorkspace(actor: Actor, sessionId: string, now: Dat
   if (session.timetableOnly) throw notFound("buổi học");
   const [sheet, board] = await Promise.all([
     seesAttendance ? getAttendanceSheet(actor, sessionId, now) : null,
-    seesStars ? getSessionStarBoard(actor, sessionId) : null,
+    seesStars ? getSessionStarBoard(actor, sessionId, now) : null,
   ]);
   return {
     session: {
@@ -218,14 +218,14 @@ export async function sessionWorkspace(actor: Actor, sessionId: string, now: Dat
       lessons: sheet.lessons,
       recorded: sheet.recorded,
       teacherRemark: sheet.teacherRemark,
-      // Cùng các lý do như trang Điểm danh: buổi bị khóa, chưa đến ngày, đã hủy, hoặc chỉ có quyền xem.
-      blockedReason:
-        sheet.blockedReason ??
-        (sheet.canSave ? null : sheet.recorded ? "Bạn chỉ có quyền xem điểm danh đã lưu, không có quyền sửa." : "Bạn không có quyền điểm danh buổi chưa điểm danh."),
+      // Cùng lý do như trang Điểm danh: lý do của buổi học (đã hủy, chưa đến ngày, lớp đã đóng, quá hạn khóa) hoặc chỉ có quyền xem.
+      blockedReason: sheet.readOnlyReason,
     },
     stars: board && {
-      blockedReason: session.status === "cancelled" ? "Buổi đã hủy nên không ghi sao được." : session.date > todayIso(now) ? "Chưa đến ngày học." : null,
-      canAward: can(actor, "stars", "add"),
+      // Cùng lý do như trang Ghi sao.
+      blockedReason: board.blockedReason,
+      readOnlyReason: board.readOnlyReason,
+      canAward: board.canAward,
       maxDeduction: board.maxDeduction,
       criteria: board.criteria.map((c) => ({ id: c.id, name: c.name, stars: c.stars })),
       students: board.students.map((s) => ({ studentId: s.studentId, code: s.code, fullName: s.fullName, makeup: s.makeup, sessionStars: s.sessionStars, total: s.total })),
