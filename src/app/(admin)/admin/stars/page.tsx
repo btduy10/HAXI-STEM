@@ -5,6 +5,7 @@ import { CrudSection } from "@/components/crud-section";
 import type { Field } from "@/components/form-dialog";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { paramText } from "@/lib/search-params";
 import { createCriteriaAction, deleteCriteriaAction, undoStarAction, updateCriteriaAction } from "@/server/actions/stars";
 import { listCriteria, listRecentStarLogs } from "@/server/services/stars";
 import type { Actor } from "@/server/guard";
@@ -28,8 +29,7 @@ export default async function StarsAdminPage({ searchParams }: PageProps<"/admin
   // Tiêu chí sao chỉ Admin chỉnh. Vai trò khác xem được và dùng sổ cái theo quyền.
   const admin = role === "admin";
   const tabs = TABS;
-  const raw = (await searchParams).tab;
-  const requested = Array.isArray(raw) ? raw[0] : raw;
+  const requested = paramText((await searchParams).tab);
   const tab: TabKey = tabs.find((t) => t.key === requested)?.key ?? (admin ? "criteria" : "ledger");
 
   return (

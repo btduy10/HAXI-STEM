@@ -9,6 +9,7 @@ import { RewardApproval } from "@/components/reward-approval";
 import { Badge } from "@/components/ui/badge";
 import { LABELS, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { paramText } from "@/lib/search-params";
 import {
   closeClassAction,
   createGiftAction,
@@ -30,14 +31,13 @@ const TABS = [
   { key: "gifts", label: "Kho quà" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
-const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
 export default async function RewardsPage({ searchParams }: PageProps<"/admin/rewards">) {
   const { actor, role, can } = await requireMenu("rewards");
   // Thêm = quà, mốc quà; Sửa = sửa quà, đóng lớp, duyệt và trao quà; xóa chỉ Admin.
   const perm: Perm = { add: can("add"), edit: can("edit"), admin: role === "admin" };
   const params = await searchParams;
-  const tab: TabKey = TABS.find((t) => t.key === one(params.tab))?.key ?? "summary";
+  const tab: TabKey = TABS.find((t) => t.key === paramText(params.tab))?.key ?? "summary";
 
   return (
     <div className="grid gap-4">
@@ -57,7 +57,7 @@ export default async function RewardsPage({ searchParams }: PageProps<"/admin/re
           </Link>
         ))}
       </nav>
-      {tab === "summary" && <SummaryTab actor={actor} classId={one(params.classId)} perm={perm} />}
+      {tab === "summary" && <SummaryTab actor={actor} classId={paramText(params.classId)} perm={perm} />}
       {tab === "tiers" && <TiersTab actor={actor} perm={perm} />}
       {tab === "gifts" && <GiftsTab actor={actor} perm={perm} />}
     </div>

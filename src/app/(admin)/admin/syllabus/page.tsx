@@ -4,6 +4,7 @@ import { CrudSection } from "@/components/crud-section";
 import type { Field } from "@/components/form-dialog";
 import { LinkButton } from "@/components/link-button";
 import { LABELS } from "@/lib/format";
+import { paramText } from "@/lib/search-params";
 import { createSyllabusLessonAction, deleteSyllabusLessonAction, updateSyllabusLessonAction } from "@/server/actions/admin";
 import { listCourses } from "@/server/services/catalog";
 import { listClasses } from "@/server/services/classes";
@@ -18,10 +19,9 @@ export default async function SyllabusPage({ searchParams }: PageProps<"/admin/s
   const [classes, courses] = await Promise.all([listClasses(actor), listCourses(actor)]);
   const byName = [...classes].sort((a, b) => a.name.localeCompare(b.name, "vi") || a.code.localeCompare(b.code, "vi"));
   const params = await searchParams;
-  const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
   // Chỉ nhận khóa và lớp có trong danh sách (tránh truy vấn với giá trị tùy ý).
-  const course = courses.find((c) => c.id === first(params.courseId)) ?? null;
-  const current = classes.find((c) => c.id === first(params.classId)) ?? null;
+  const course = courses.find((c) => c.id === paramText(params.courseId)) ?? null;
+  const current = classes.find((c) => c.id === paramText(params.classId)) ?? null;
   const lessons = await listSyllabus(actor, { courseId: course?.id, classId: current?.id });
 
   const period: Field = { name: "period", label: "Buổi", type: "number", required: true, hint: "Buổi thứ mấy của khóa học (1, 2, 3…)." };

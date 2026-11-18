@@ -5,18 +5,17 @@ import { PrintButton } from "@/components/print-button";
 import { PrintHeader, PrintRow, PrintSheet } from "@/components/tuition-print";
 import { PAYMENT_METHOD_LABEL, moneyInWords } from "@/domain/tuition";
 import { formatDate, formatMoney } from "@/lib/format";
+import { isUuid } from "@/lib/search-params";
 import { AppError } from "@/server/errors";
 import { getReceipt } from "@/server/services/tuition";
 import { requireMenu } from "@/server/session";
 
 export const metadata: Metadata = { title: "Phiếu thu học phí" };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export default async function ReceiptPage({ params }: PageProps<"/admin/tuition/receipts/[id]">) {
   const { actor } = await requireMenu("tuition");
   const { id } = await params;
-  if (!UUID.test(id)) notFound();
+  if (!isUuid(id)) notFound();
   const data = await getReceipt(actor, id).catch((error: unknown) => {
     if (error instanceof AppError && error.code === "NOT_FOUND") notFound();
     throw error;

@@ -4,24 +4,18 @@ import { PrintButton } from "@/components/print-button";
 import { PrintHeader, PrintRow, PrintSheet } from "@/components/tuition-print";
 import { moneyInWords } from "@/domain/tuition";
 import { formatDate, formatMoney, todayIso } from "@/lib/format";
+import { paramId } from "@/lib/search-params";
 import { getFeeNotices } from "@/server/services/tuition";
 import { requireMenu } from "@/server/session";
 
 export const metadata: Metadata = { title: "Giấy báo học phí" };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Giấy báo học phí gửi phụ huynh: một học viên (`enrollmentId`) hoặc cả lớp (`classId`), mỗi em một trang khi in. */
 export default async function FeeNoticePage({ searchParams }: PageProps<"/admin/tuition/notice">) {
   const { actor } = await requireMenu("tuition");
   const params = await searchParams;
-  const uuid = (key: string) => {
-    const value = params[key];
-    const text = Array.isArray(value) ? value[0] : value;
-    return text && UUID.test(text) ? text : null;
-  };
-  const classId = uuid("classId");
-  const { notices, center } = await getFeeNotices(actor, { enrollmentId: uuid("enrollmentId"), classId, unpaidOnly: params.unpaidOnly === "1" });
+  const classId = paramId(params.classId);
+  const { notices, center } = await getFeeNotices(actor, { enrollmentId: paramId(params.enrollmentId), classId, unpaidOnly: params.unpaidOnly === "1" });
   const today = todayIso();
   const back = classId ?? notices[0]?.classId;
 

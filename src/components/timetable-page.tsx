@@ -8,17 +8,15 @@ import { MonthView, TIMETABLE_ONLY_LABEL, TeacherLegend, type TimetableSession, 
 import { Button } from "@/components/ui/button";
 import { LinkButton } from "@/components/link-button";
 import { TIMETABLE_ONLY_SHADE, teacherShade } from "@/domain/timetable-colors";
-import { addDays, addMonths, endOfMonth, parseIsoDate, startOfMonth, startOfWeek } from "@/lib/dates";
+import { addDays, addMonths, endOfMonth, startOfMonth, startOfWeek } from "@/lib/dates";
 import { formatDate, todayIso } from "@/lib/format";
+import { paramDate, paramId, paramText } from "@/lib/search-params";
 import type { Actor } from "@/server/guard";
 import { listRooms, listTeachers, listTimeSlotsForGrid } from "@/server/services/catalog";
 import { listClasses } from "@/server/services/classes";
 import { listSessions } from "@/server/services/sessions";
 
 type Params = Record<string, string | string[] | undefined>;
-const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
-const UUID = /^[0-9a-f-]{36}$/i;
-const uuidOrEmpty = (v: string) => (UUID.test(v) ? v : "");
 
 /**
  * Thời khóa biểu dùng chung. `manage` = trang quản lý (có bộ lọc GV/lớp/phòng); không thì là lịch cá nhân.
@@ -45,10 +43,10 @@ export async function TimetablePage({
 }) {
   const admin = manage;
   const today = todayIso();
-  const view = one(params.view) === "month" ? "month" : "week";
-  const date = parseIsoDate(one(params.date), today);
+  const view = paramText(params.view) === "month" ? "month" : "week";
+  const date = paramDate(params.date, today);
   const filters = admin
-    ? { teacherId: uuidOrEmpty(one(params.teacherId)), classId: uuidOrEmpty(one(params.classId)), roomId: uuidOrEmpty(one(params.roomId)) }
+    ? { teacherId: paramId(params.teacherId) ?? "", classId: paramId(params.classId) ?? "", roomId: paramId(params.roomId) ?? "" }
     : { teacherId: "", classId: "", roomId: "" };
 
   const range =

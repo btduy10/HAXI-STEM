@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { todayIso } from "@/lib/format";
+import { paramText } from "@/lib/search-params";
 import { orNotFound, uuidParam } from "@/server/page";
 import { listRooms, listTeachers, listTimeSlots } from "@/server/services/catalog";
 import { getClass, listClassTeachers } from "@/server/services/classes";
@@ -14,8 +15,7 @@ export const metadata: Metadata = { title: "Thêm buổi bù" };
 export default async function MakeupPage({ searchParams }: PageProps<"/admin/sessions/makeup">) {
   const { actor, can } = await requireMenu("timetable");
   if (!can("add")) redirect("/admin/timetable");
-  const raw = (await searchParams).classId;
-  const classId = uuidParam((Array.isArray(raw) ? raw[0] : raw) ?? "");
+  const classId = uuidParam(paramText((await searchParams).classId));
   const cls = await orNotFound(getClass(actor, classId));
   const [students, teachers, rooms, slots, assigned] = await Promise.all([
     listClassStudents(actor, classId),

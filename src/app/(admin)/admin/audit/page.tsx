@@ -3,26 +3,25 @@ import { selectClass } from "@/components/form-dialog";
 import { LinkButton } from "@/components/link-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { parseIsoDate } from "@/lib/dates";
 import { formatDateTime } from "@/lib/format";
+import { paramChoice, paramDate, paramText } from "@/lib/search-params";
 import { listAuditLogs, listAuditTables } from "@/server/services/reports";
 import { requirePageUser } from "@/server/session";
 
 export const metadata: Metadata = { title: "Nhật ký" };
 
-const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 
 export default async function AuditPage({ searchParams }: PageProps<"/admin/audit">) {
   const { actor } = await requirePageUser("admin");
   const params = await searchParams;
   const tables = await listAuditTables(actor);
   const filters = {
-    action: one(params.action).slice(0, 50),
-    tableName: tables.includes(one(params.table)) ? one(params.table) : "",
-    from: parseIsoDate(one(params.from), ""),
-    to: parseIsoDate(one(params.to), ""),
+    action: paramText(params.action, 50),
+    tableName: paramChoice(params.table, tables, ""),
+    from: paramDate(params.from, ""),
+    to: paramDate(params.to, ""),
   };
-  const page = Math.min(10_000, Math.max(1, Number.parseInt(one(params.page), 10) || 1));
+  const page = Math.min(10_000, Math.max(1, Number.parseInt(paramText(params.page), 10) || 1));
   const result = await listAuditLogs(actor, { ...filters, page });
 
   const href = (p: number) => {

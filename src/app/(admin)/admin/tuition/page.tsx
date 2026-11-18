@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { PAYMENT_METHOD_LABEL, TUITION_STATUS_LABEL, type TuitionStatus } from "@/domain/tuition";
 import { LABELS, formatDate, formatMoney, todayIso } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { paramText } from "@/lib/search-params";
 import { cancelReceiptAction, createReceiptAction, deleteReceiptAction, setClassFeeAction, setDiscountAction } from "@/server/actions/admin";
 import { listClassFees, listReceipts, listTuition } from "@/server/services/tuition";
 import { requireMenu } from "@/server/session";
@@ -30,15 +31,11 @@ const STATUS_VARIANT: Record<TuitionStatus, "default" | "secondary" | "destructi
 export default async function TuitionPage({ searchParams }: PageProps<"/admin/tuition">) {
   const { actor, role, can } = await requireMenu("tuition");
   const params = await searchParams;
-  const one = (key: string) => {
-    const value = params[key];
-    return ((Array.isArray(value) ? value[0] : value) ?? "").slice(0, 100);
-  };
   const classes = await listClassFees(actor);
   // Chỉ nhận lớp và trạng thái có trong danh sách (tránh truy vấn với giá trị tùy ý).
-  const cls = classes.find((c) => c.id === one("classId")) ?? null;
-  const status = STATUSES.find((s) => s === one("status")) ?? null;
-  const q = one("q");
+  const cls = classes.find((c) => c.id === paramText(params.classId)) ?? null;
+  const status = STATUSES.find((s) => s === paramText(params.status)) ?? null;
+  const q = paramText(params.q);
   const [{ rows, total }, receipts] = await Promise.all([
     listTuition(actor, { classId: cls?.id, status, q }),
     listReceipts(actor, { classId: cls?.id }, cls ? 200 : 30),

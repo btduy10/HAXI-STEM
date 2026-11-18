@@ -11,6 +11,7 @@ import { ROSTER_ROWS, rosterTime } from "@/domain/roster";
 import { WEEKDAY_SHORT, isoWeekday } from "@/lib/dates";
 import { LABELS, formatDate, todayIso } from "@/lib/format";
 import { newStudentFields } from "@/lib/student-fields";
+import { paramText } from "@/lib/search-params";
 import {
   cancelMakeupAction,
   deleteEnrollmentAction,
@@ -31,8 +32,7 @@ export const metadata: Metadata = { title: "Ghi danh" };
 export default async function EnrollmentsPage({ searchParams }: PageProps<"/admin/enrollments">) {
   const { actor, role, can } = await requireMenu("enrollments");
   const classes = await listClasses(actor);
-  const raw = (await searchParams).classId;
-  const requested = Array.isArray(raw) ? raw[0] : raw;
+  const requested = paramText((await searchParams).classId);
   // Chỉ nhận classId có trong danh sách lớp (tránh truy vấn với giá trị tùy ý).
   const current = classes.find((c) => c.id === requested) ?? null;
 

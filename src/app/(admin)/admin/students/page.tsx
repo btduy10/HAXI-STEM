@@ -5,6 +5,7 @@ import { LinkButton } from "@/components/link-button";
 import { Input } from "@/components/ui/input";
 import { LABELS, formatDate } from "@/lib/format";
 import { studentFields } from "@/lib/student-fields";
+import { paramText } from "@/lib/search-params";
 import { deleteStudentAction, updateStudentAction } from "@/server/actions/admin";
 import { seesStudentPrivate } from "@/server/guard";
 import { listStudentsPageWithStars } from "@/server/services/student-history";
@@ -19,13 +20,12 @@ export default async function StudentsPage({ searchParams }: PageProps<"/admin/s
   const privateInfo = seesStudentPrivate(actor);
   const formFields = studentFields({ privateInfo });
   const columns = ["Mã HV", "Họ tên", ...(privateInfo ? ["Ngày sinh"] : []), "Khối", ...(privateInfo ? ["Phụ huynh", "Điện thoại"] : []), "Sao", "Trạng thái"];
-  const raw = (await searchParams).q;
-  const q = (Array.isArray(raw) ? raw[0] : raw)?.slice(0, 100) ?? "";
-  const rawPage = (await searchParams).page;
+  const params = await searchParams;
+  const q = paramText(params.q);
   const { rows: students, total, page, pageCount, pageSize } = await listStudentsPageWithStars(
     actor,
     q,
-    Number(Array.isArray(rawPage) ? rawPage[0] : rawPage),
+    Number(paramText(params.page)),
   );
   const pageHref = (n: number) => {
     const query = new URLSearchParams();

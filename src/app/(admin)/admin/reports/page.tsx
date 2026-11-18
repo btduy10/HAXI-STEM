@@ -11,9 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FINANCE_VIEWS, FINANCE_VIEW_LABEL, type FinanceView, compactMoney } from "@/domain/finance";
 import { TUITION_STATUS_LABEL } from "@/domain/tuition";
-import { endOfMonth, parseIsoDate } from "@/lib/dates";
+import { endOfMonth } from "@/lib/dates";
 import { LABELS, formatDate, formatMoney, todayIso } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { paramDate, paramText } from "@/lib/search-params";
 import { createPurchaseAction, deletePurchaseAction, updatePurchaseAction } from "@/server/actions/admin";
 import { type Actor, seesAllClasses } from "@/server/guard";
 import { listClasses } from "@/server/services/classes";
@@ -35,7 +36,6 @@ type Metric = (typeof METRICS)[number];
 const METRIC_LABEL: Record<Metric, string> = { revenue: "Doanh thu", expense: "Chi", profit: "Lãi" };
 
 type Params = Record<string, string | string[] | undefined>;
-const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const monthOf = (value: string, today: string) => (MONTH.test(value) ? value : today.slice(0, 7));
 const monthLabel = (month: string) => `${Number(month.slice(5, 7))}/${month.slice(0, 4)}`;
@@ -45,7 +45,7 @@ const empty = "rounded-2xl border border-dashed p-6 text-center text-sm text-mut
 export default async function ReportsPage({ searchParams }: PageProps<"/admin/reports">) {
   const { actor, role, can } = await requireMenu("reports");
   const params = await searchParams;
-  const tab: TabKey = TABS.find((t) => t.key === one(params.tab))?.key ?? "revenue";
+  const tab: TabKey = TABS.find((t) => t.key === paramText(params.tab))?.key ?? "revenue";
 
   return (
     <div className="grid gap-4">
@@ -93,9 +93,9 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint?:
 /** Doanh thu – Chi – Lãi theo tuần / tháng / năm, kèm biểu đồ của chỉ số đang chọn. */
 async function RevenueTab({ actor, params }: { actor: Actor; params: Params }) {
   const today = todayIso();
-  const view: FinanceView = FINANCE_VIEWS.find((v) => v === one(params.view)) ?? "month";
-  const metric: Metric = METRICS.find((m) => m === one(params.metric)) ?? "revenue";
-  const anchor = parseIsoDate(one(params.date), today);
+  const view: FinanceView = FINANCE_VIEWS.find((v) => v === paramText(params.view)) ?? "month";
+  const metric: Metric = METRICS.find((m) => m === paramText(params.metric)) ?? "revenue";
+  const anchor = paramDate(params.date, today);
   const report = await financeReport(actor, { view, anchor });
   const range = `Từ ${formatDate(report.from)} đến ${formatDate(report.to)}`;
   const scope = view === "week" ? "12 tuần gần nhất" : view === "month" ? `12 tháng của năm ${anchor.slice(0, 4)}` : "5 năm gần nhất";
@@ -218,7 +218,7 @@ function MonthForm({ tab, month }: { tab: TabKey; month: string }) {
 
 /** Chi lương một tháng, từng giáo viên: lấy từ Chấm công (số công đã dạy × mức lương). */
 async function SalaryTab({ actor, params, canTimesheet }: { actor: Actor; params: Params; canTimesheet: boolean }) {
-  const month = monthOf(one(params.month), todayIso());
+  const month = monthOf(paramText(params.month), todayIso());
   const salary = await salaryByTeacher(actor, month);
   return (
     <div className="grid gap-4">
@@ -286,7 +286,7 @@ async function SalaryTab({ actor, params, canTimesheet }: { actor: Actor; params
 /** Mua sắm của một tháng: nhập hạng mục, loại, số lượng, đơn giá; thành tiền tự tính. */
 async function PurchasesTab({ actor, params, perm }: { actor: Actor; params: Params; perm: { add: boolean; edit: boolean; admin: boolean } }) {
   const today = todayIso();
-  const month = monthOf(one(params.month), today);
+  const month = monthOf(paramText(params.month), today);
   const from = `${month}-01`;
   const [{ rows, total }, categories] = await Promise.all([listPurchases(actor, { from, to: endOfMonth(from) }), purchaseCategories(actor)]);
   const fields: Field[] = [
@@ -329,7 +329,7 @@ async function PurchasesTab({ actor, params, perm }: { actor: Actor; params: Par
 async function UnpaidTab({ actor, params }: { actor: Actor; params: Params }) {
   const classes = await listClasses(actor);
   // Chỉ nhận lớp có trong danh sách (tránh truy vấn với giá trị tùy ý).
-  const current = classes.find((c) => c.id === one(params.classId)) ?? null;
+  const current = classes.find((c) => c.id === paramText(params.classId)) ?? null;
   const { rows, total } = await unpaidTuition(actor, { classId: current?.id });
   return (
     <div className="grid gap-4">

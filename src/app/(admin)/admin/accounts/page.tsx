@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime } from "@/lib/format";
 import { ADMIN_LABEL, roleLabel, roleOptions } from "@/lib/permissions";
+import { paramText } from "@/lib/search-params";
 import {
   createAccountAction,
   deleteAccountAction,
@@ -26,7 +27,6 @@ export const metadata: Metadata = { title: "Tài khoản" };
 
 const ROLE_HINT = "Quyền của tài khoản theo vai trò này; tick quyền cho từng vai trò ở Cấu hình → Phân quyền.";
 const PASSWORD_HINT = "Mật khẩu tạm, tối thiểu 8 ký tự gồm chữ và số. Người dùng phải đổi ở lần đăng nhập đầu.";
-const one = (v: string | string[] | undefined) => ((Array.isArray(v) ? v[0] : v) ?? "").slice(0, 100);
 
 export default async function AccountsPage({ searchParams }: PageProps<"/admin/accounts">) {
   const user = await requirePageUser("admin");
@@ -41,8 +41,8 @@ export default async function AccountsPage({ searchParams }: PageProps<"/admin/a
   const roleChoices = [{ value: "admin", label: ADMIN_LABEL }, ...roleOptions(roles)];
 
   // Lọc theo vai trò và từ khóa; sắp xếp: Quản trị trước, rồi theo tên vai trò, rồi tên đăng nhập.
-  const q = one(params.q).trim().toLowerCase();
-  const roleFilter = roleChoices.some((r) => r.value === one(params.role)) ? one(params.role) : "";
+  const q = paramText(params.q).trim().toLowerCase();
+  const roleFilter = roleChoices.some((r) => r.value === paramText(params.role)) ? paramText(params.role) : "";
   const accounts = all
     .filter((a) => (!roleFilter || a.role === roleFilter) && (!q || `${a.username} ${a.name} ${a.teacherName ?? ""}`.toLowerCase().includes(q)))
     .sort(
@@ -196,7 +196,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/admin/a
       </div>
 
       <form className="flex flex-col gap-2 sm:flex-row" role="search">
-        <Input name="q" defaultValue={one(params.q)} placeholder="Tìm theo tên đăng nhập, tên hiển thị…" aria-label="Tìm tài khoản" className="h-10 sm:max-w-sm" />
+        <Input name="q" defaultValue={paramText(params.q)} placeholder="Tìm theo tên đăng nhập, tên hiển thị…" aria-label="Tìm tài khoản" className="h-10 sm:max-w-sm" />
         <AutoSubmitSelect name="role" defaultValue={roleFilter} aria-label="Lọc theo vai trò" className="h-10 sm:max-w-56">
           <option value="">Tất cả vai trò</option>
           {roleChoices.map((r) => (

@@ -7,10 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { WEEKDAY_NAMES, addMonths, endOfMonth, isoWeekday, parseIsoDate, startOfMonth } from "@/lib/dates";
+import { WEEKDAY_NAMES, addMonths, endOfMonth, isoWeekday, startOfMonth } from "@/lib/dates";
 import { orderSlotFrames } from "@/domain/time-slots";
 import { formatDate, formatMoney, formatTime, todayIso } from "@/lib/format";
 import { SLOT_NAME_LABELS, TIMESHEET_ROLES } from "@/lib/validation/entities";
+import { paramDate, paramText } from "@/lib/search-params";
 import {
   adjustSessionTimesheetAction,
   createTimesheetEntryAction,
@@ -31,19 +32,15 @@ const hours = (minutes: number) => (minutes / 60).toLocaleString("vi-VN", { maxi
 export default async function TimesheetPage({ searchParams }: PageProps<"/admin/timesheet">) {
   const { actor, role, can } = await requireMenu("timesheet");
   const params = await searchParams;
-  const one = (key: string) => {
-    const value = params[key];
-    return (Array.isArray(value) ? value[0] : value) || undefined;
-  };
   const [teachers, classes, slots] = await Promise.all([listTeachers(actor), listClasses(actor), listTimeSlots(actor)]);
   // Chỉ nhận id có trong danh sách (tránh truy vấn với giá trị tùy ý).
-  const teacher = teachers.find((t) => t.id === one("teacherId")) ?? null;
-  const cls = classes.find((c) => c.id === one("classId")) ?? null;
+  const teacher = teachers.find((t) => t.id === paramText(params.teacherId)) ?? null;
+  const cls = classes.find((c) => c.id === paramText(params.classId)) ?? null;
 
   // Mặc định: tháng hiện tại. Chọn lớp mà chưa nhập ngày thì lấy trọn thời gian của lớp (tính công theo khóa).
   const today = todayIso();
-  const from = parseIsoDate(one("from"), cls ? cls.startDate : startOfMonth(today));
-  const requestedTo = parseIsoDate(one("to"), cls ? cls.endDate : endOfMonth(today));
+  const from = paramDate(params.from, cls ? cls.startDate : startOfMonth(today));
+  const requestedTo = paramDate(params.to, cls ? cls.endDate : endOfMonth(today));
   const to = requestedTo < from ? from : requestedTo;
 
   const { rows, summary } = await teacherTimesheet(actor, { from, to, teacherId: teacher?.id, classId: cls?.id });

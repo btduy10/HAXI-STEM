@@ -1,31 +1,26 @@
-import { addDays, daysBetween, parseIsoDate } from "@/lib/dates";
+import { addDays, daysBetween } from "@/lib/dates";
 import { todayIso } from "@/lib/format";
+import { paramDate, paramId } from "@/lib/search-params";
 import { AppError } from "@/server/errors";
 import { handleExport } from "@/server/export-route";
 import { can } from "@/server/guard";
 import { timetableDoc } from "@/server/services/reports";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Xuất TKB. Ai được xem menu Thời khóa biểu thì lọc theo GV/lớp/phòng; còn lại chỉ nhận lịch cá nhân (service giới hạn phạm vi). */
 export async function GET(request: Request) {
   return handleExport(request, "timetable", null, async (actor) => {
     const params = new URL(request.url).searchParams;
     const today = todayIso();
-    const from = parseIsoDate(params.get("from"), today);
-    const to = parseIsoDate(params.get("to"), addDays(from, 6));
+    const from = paramDate(params.get("from"), today);
+    const to = paramDate(params.get("to"), addDays(from, 6));
     if (to < from || daysBetween(from, to) > 92) throw new AppError("VALIDATION", "Khoảng ngày xuất tối đa 3 tháng.");
-    const uuid = (key: string) => {
-      const value = params.get(key);
-      return value && UUID.test(value) ? value : null;
-    };
     const personal = !can(actor, "timetable", "view");
     return timetableDoc(actor, {
       from,
       to,
-      classId: uuid("classId"),
-      teacherId: uuid("teacherId"),
-      roomId: uuid("roomId"),
+      classId: paramId(params.get("classId")),
+      teacherId: paramId(params.get("teacherId")),
+      roomId: paramId(params.get("roomId")),
       personal,
     });
   });
