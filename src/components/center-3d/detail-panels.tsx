@@ -4,6 +4,7 @@ import { ArrowLeftIcon, ClipboardCheckIcon, StarIcon } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { type CenterRoom, type CenterSession, ROOM_STATE_LABELS, type RoomState } from "@/domain/center-3d";
+import type { Person } from "@/domain/center-selection";
 import { WEEKDAY_SHORT, isoWeekday } from "@/lib/dates";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -18,7 +19,7 @@ import type { Remote } from "./use-remote";
 export type RoomRow = { room: CenterRoom; state: RoomState; session: CenterSession | null };
 /** Quyền của người dùng, tính ở máy chủ. Chỉ để ẩn bớt nút và không gọi những gì chắc chắn bị từ chối; máy chủ vẫn kiểm tra lại. */
 export type StagePerms = { attendance: boolean; stars: boolean; students: boolean };
-export type Person = { kind: "teacher" | "student"; id: string; name: string };
+export type { Person };
 export type WorkspaceTab = "attendance" | "stars";
 
 function Back({ onClick, children }: { onClick: () => void; children: ReactNode }) {

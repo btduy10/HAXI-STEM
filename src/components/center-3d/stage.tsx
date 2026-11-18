@@ -5,13 +5,14 @@ import { useRouter } from "next/navigation";
 import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { type CenterData, type CenterRoom, type CenterSession, ROOM_STATE_LABELS, dayProgress, layoutCampus, roomStatus, sessionSteps } from "@/domain/center-3d";
+import { NO_SELECTION, type SelectAction, type SelectContext, type Selection, select, selectedFigure } from "@/domain/center-selection";
 import { timeNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { centerSearchAction, centerSessionAction, centerStudentAction, centerTeacherAction } from "@/server/actions/center";
 import { CenterFlat } from "./center-flat";
 import type { SceneApi, SceneFlight, SceneInsets, SceneMarker } from "./center-scene";
 import { graphics, readView, subscribeView, writeView } from "./device";
-import { DetailPanel, type Person, type RoomRow, type StagePerms, type WorkspaceTab } from "./detail-panels";
+import { DetailPanel, type RoomRow, type StagePerms, type WorkspaceTab } from "./detail-panels";
 import { CameraButtons, Kpis, ListsPanel, ProgressPanel, type StageKpi, type TeacherRow } from "./panels";
 import { SessionWorkspace } from "./session-workspace";
 import { type OverdueItem, type SearchResult, TopBar } from "./top-bar";
@@ -125,9 +126,8 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
     () => timeNow(),
     () => center.now,
   );
-  const [roomId, setRoomId] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [person, setPerson] = useState<Person | null>(null);
+  const [selection, setSelection] = useState<Selection>(NO_SELECTION);
+  const { roomId, sessionId, person } = selection;
   const [flight, setFlight] = useState<SceneFlight | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceTab | null>(null);
   const [tick, setTick] = useState(0);
@@ -178,8 +178,7 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
   );
   const roomNames = useMemo(() => new Map(center.rooms.map((room) => [room.id, room.name])), [center.rooms]);
   const roomNameOf = (id: string | null) => (id ? (roomNames.get(id) ?? null) : null);
-  const placedRoom = (item: CenterSession) => (item.roomId && roomNames.has(item.roomId) ? item.roomId : null);
-  const unplaced = center.sessions.filter((item) => !placedRoom(item));
+  const unplaced = center.sessions.filter((item) => !(item.roomId && roomNames.has(item.roomId)));
   const ordered = useMemo(
     () => [...center.sessions].sort((a, b) => a.startTime.localeCompare(b.startTime) || a.className.localeCompare(b.className, "vi")),
     [center.sessions],
@@ -211,60 +210,27 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
   const teacherKey = person?.kind === "teacher" ? person.id : null;
   const teacherDetail = useRemote(teacherKey, () => centerTeacherAction({ teacherId: teacherKey }), version);
 
-  const flyTo = (target: string | null) => setFlight((current) => ({ roomId: target, nonce: (current?.nonce ?? 0) + 1 }));
-  const selectRoom = (id: string | null) => {
-    setPerson(null);
-    setRoomId(id);
-    // Chọn phòng là chọn luôn buổi đang ghi trên nhãn của phòng (đang học, sắp học, hoặc buổi cuối đã xong).
-    setSessionId(id ? (rooms.find((row) => row.room.id === id)?.session?.id ?? null) : null);
-    if (id) flyTo(id);
+  // Chọn đối tượng: luật nằm ở `select` (src/domain/center-selection.ts); ở đây chỉ lưu lựa chọn mới và cho máy quay bay.
+  const selectContext: SelectContext = {
+    sessions: center.sessions,
+    roomIds: roomNames,
+    now,
+    students: perms.students,
+    roster: sessionDetail.data ? { sessionId: sessionDetail.data.id, students: sessionDetail.data.students } : null,
   };
-  const selectSession = (id: string) => {
-    const target = center.sessions.find((item) => item.id === id);
-    if (!target) return;
-    setPerson(null);
-    setSessionId(id);
-    setRoomId(placedRoom(target));
-    flyTo(placedRoom(target));
+  const apply = (action: SelectAction) => {
+    const { selection: next, flyTo } = select(selection, action, selectContext);
+    setSelection(next);
+    if (flyTo !== undefined) setFlight((current) => ({ roomId: flyTo, nonce: (current?.nonce ?? 0) + 1 }));
   };
-  const selectTeacher = (id: string, name: string) => {
-    setPerson({ kind: "teacher", id, name });
-    // Giữ buổi đang chọn nếu chính giáo viên này dạy; không thì bay tới buổi giáo viên đang dạy (hoặc buổi kế tiếp, hoặc buổi cuối hôm nay).
-    const target = session?.teacherId === id ? session : roomStatus(center.sessions.filter((item) => item.teacherId === id), now).session;
-    if (!target) return;
-    setSessionId(target.id);
-    setRoomId(placedRoom(target));
-    flyTo(placedRoom(target));
-  };
-  const selectStudent = (id: string, name: string, viaSessionId?: string) => {
-    setPerson({ kind: "student", id, name });
-    const target = viaSessionId ? center.sessions.find((item) => item.id === viaSessionId) : session;
-    if (!target) return;
-    setSessionId(target.id);
-    setRoomId(placedRoom(target));
-    flyTo(placedRoom(target));
-  };
-  // Bấm một hình người trước cửa phòng trong cảnh 3D.
-  const pickFigure = (id: string, kind: "teacher" | "student", index: number) => {
-    const target = rooms.find((row) => row.room.id === id)?.session;
-    if (!target) return;
-    if (kind === "teacher") {
-      if (target.teacherId && target.teacherName) selectTeacher(target.teacherId, target.teacherName);
-      return;
-    }
-    // Hình học viên thứ i ứng với học viên thứ i của danh sách, khi danh sách của buổi đó đã tải; chưa thì mở lớp trước.
-    const student = perms.students && sessionDetail.data?.id === target.id ? sessionDetail.data.students[index] : undefined;
-    if (student) selectStudent(student.studentId, student.fullName, target.id);
-    else selectSession(target.id);
-  };
+  const selectRoom = (id: string | null) => apply({ type: "room", roomId: id });
+  const selectSession = (id: string) => apply({ type: "session", sessionId: id });
+  const selectTeacher = (id: string, name: string) => apply({ type: "teacher", id, name });
+  const selectStudent = (id: string, name: string, viaSessionId?: string) => apply({ type: "student", id, name, viaSessionId });
+  const pickFigure = (id: string, kind: "teacher" | "student", index: number) => apply({ type: "figure", roomId: id, kind, index });
 
   // Hình người đang chọn trong cảnh: giáo viên của buổi đang chọn, hoặc học viên theo thứ tự trong danh sách của buổi.
-  let marker: SceneMarker | null = null;
-  if (person && session && room && room.session?.id === session.id) {
-    if (person.kind === "teacher" && session.teacherId === person.id) marker = { roomId: room.room.id, kind: "teacher", index: 0, label: person.name };
-    const index = person.kind === "student" ? (sessionDetail.data?.students.findIndex((item) => item.studentId === person.id) ?? -1) : -1;
-    if (index >= 0) marker = { roomId: room.room.id, kind: "student", index, label: person.name };
-  }
+  const marker: SceneMarker | null = selectedFigure(selection, selectContext);
 
   // Tìm kiếm: phòng, lớp, giáo viên lọc ngay trên dữ liệu hôm nay; học viên do máy chủ tìm (theo quyền) sau khi ngừng gõ.
   const needle = fold(query.trim());
@@ -399,7 +365,7 @@ export function Stage({ data, children }: { data: StageData; children?: ReactNod
             onSession={selectSession}
             onTeacher={selectTeacher}
             onStudent={(id, name) => selectStudent(id, name)}
-            onClosePerson={() => setPerson(null)}
+            onClosePerson={() => apply({ type: "close-person" })}
             onWorkspace={setWorkspace}
           />
           <ListsPanel
